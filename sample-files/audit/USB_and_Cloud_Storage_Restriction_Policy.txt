@@ -1,0 +1,4 @@
+POLICY DOCUMENT: ENDPOINT SECURITY & REMOVABLE MEDIA RESTRICTION
+Document Title: USB and Cloud Storage Restriction Policy v2.1
+Status: POLICY DOCUMENT FOUND
+Mandate: All USB storage devices, cloud drives, and local printers must be disabled across phone lending workstations.

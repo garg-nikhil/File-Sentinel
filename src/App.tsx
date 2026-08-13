@@ -9,6 +9,7 @@ import { QuarantineView } from './components/QuarantineView';
 import { RulesView } from './components/RulesView';
 import { HistoryView } from './components/HistoryView';
 import { SettingsView } from './components/SettingsView';
+import { AuditComplianceView } from './components/audit/AuditComplianceView';
 import { api } from './services/api';
 import { DashboardStats, ScanSession } from './types';
 
@@ -72,6 +73,12 @@ export default function App() {
                 onSelectFile={handleSelectFile}
                 onStartQuickScan={handleStartQuickScan}
               />
+            )}
+
+            {activeTab === 'audit' && (
+              <div className="p-6">
+                <AuditComplianceView />
+              </div>
             )}
 
             {activeTab === 'scan' && (

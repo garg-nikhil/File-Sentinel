@@ -120,5 +120,55 @@ export const api = {
   async getAuditLogs() {
     const res = await fetch('/api/audit-logs');
     return res.json();
+  },
+
+  // --- AUDIT COMPLIANCE SERVICES ---
+  async runAuditScan(params?: {
+    target_dir?: string;
+    audit_date?: string;
+    agency_name?: string;
+    auditor_name?: string;
+  }) {
+    const res = await fetch('/api/audit/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params || {})
+    });
+    return res.json();
+  },
+
+  async getAuditSessions() {
+    const res = await fetch('/api/audit/sessions');
+    return res.json();
+  },
+
+  async getAuditSessionDetail(auditId: string) {
+    const res = await fetch(`/api/audit/session/${auditId}`);
+    return res.json();
+  },
+
+  async submitAuditorOverride(params: {
+    audit_id: string;
+    parameter_id: string;
+    new_status: string;
+    auditor_name: string;
+    comment?: string;
+  }) {
+    const res = await fetch('/api/audit/override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params)
+    });
+    return res.json();
+  },
+
+  async getAuditChecklist() {
+    const res = await fetch('/api/audit/checklist');
+    return res.json();
+  },
+
+  async getEvidenceGaps(auditId: string) {
+    const res = await fetch(`/api/audit/gaps/${auditId}`);
+    return res.json();
   }
 };

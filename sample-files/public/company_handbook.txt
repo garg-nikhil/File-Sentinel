@@ -1,0 +1,11 @@
+Welcome to FileSentinel Technologies!
+Our mission is to safeguard enterprise data privacy through local-first static inspection.
+
+Office Hours: 9:00 AM - 5:00 PM
+Support Email: support@filesentinel.example.com
+General Phone: +1-800-555-0199
+
+Code of Conduct:
+1. Treat all customer data with extreme care.
+2. Never export sensitive unencrypted files to unauthorized public locations.
+3. Report any potential data leaks immediately to the Security Operations Center.

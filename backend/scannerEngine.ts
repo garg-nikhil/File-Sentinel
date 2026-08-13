@@ -1,16 +1,14 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BUILTIN_RULES } from '../src/rules/builtinRules.js';
+import { defaultRegistry } from './extractors/registry.js';
+import { ExtractionResult } from './extractors/base.js';
 import {
+  AppSettings,
   Classification,
-  FileItem,
   Finding,
-  FindingSource,
-  QuarantineItem,
   Rule,
-  ScanSession,
-  Severity
+  ScanSession
 } from '../src/types.js';
 
 export class FileScannerEngine {
@@ -41,29 +39,46 @@ export class FileScannerEngine {
     visitedPaths: Set<string> = new Set()
   ): string[] {
     if (currentDepth > maxDepth) return discovered;
-    if (!fs.existsSync(rootPath)) return discovered;
+
+    // Resolve & normalize path for security (FINDING-05)
+    const resolvedPath = path.resolve(rootPath);
+    const normalizedPath = path.normalize(resolvedPath);
+
+    // Enforce BASE_ALLOWED_DIR restriction if configured
+    const baseAllowed = process.env.BASE_ALLOWED_DIR ? path.resolve(process.env.BASE_ALLOWED_DIR) : null;
+    if (baseAllowed) {
+      const rel = path.relative(baseAllowed, normalizedPath);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) {
+        throw new Error(`Access denied: Requested path '${normalizedPath}' is outside the allowed directory '${baseAllowed}'`);
+      }
+    }
+
+    if (!fs.existsSync(normalizedPath)) return discovered;
 
     try {
-      const realPath = fs.realpathSync(rootPath);
+      const realPath = fs.realpathSync(normalizedPath);
       if (visitedPaths.has(realPath)) return discovered; // Prevent infinite recursion on symlinks
       visitedPaths.add(realPath);
 
-      const stats = fs.statSync(rootPath);
+      const stats = fs.statSync(normalizedPath);
       if (stats.isFile()) {
-        if (this.isSupportedFile(rootPath)) {
-          discovered.push(rootPath);
+        if (this.isSupportedFile(normalizedPath)) {
+          discovered.push(normalizedPath);
         }
       } else if (stats.isDirectory()) {
-        const entries = fs.readdirSync(rootPath);
+        const entries = fs.readdirSync(normalizedPath);
         for (const entry of entries) {
           // Ignore node_modules, .git, dist, build for speed & safety
           if (['node_modules', '.git', 'dist', 'build', '.cache', '.aistudio'].includes(entry)) continue;
-          const fullPath = path.join(rootPath, entry);
+          const fullPath = path.join(normalizedPath, entry);
           this.discoverFiles(fullPath, maxDepth, currentDepth + 1, discovered, visitedPaths);
         }
       }
-    } catch (err) {
-      console.warn(`[Discovery] Skipped path ${rootPath}:`, err);
+    } catch (err: any) {
+      if (err.message && err.message.startsWith('Access denied')) {
+        throw err;
+      }
+      console.warn(`[Discovery] Skipped path ${normalizedPath}:`, err);
     }
 
     return discovered;
@@ -71,60 +86,20 @@ export class FileScannerEngine {
 
   public isSupportedFile(filePath: string): boolean {
     const ext = path.extname(filePath).toLowerCase();
-    return ['.xlsx', '.csv', '.docx', '.txt', '.pptx', '.pdf'].includes(ext);
+    return ['.xlsx', '.xlsm', '.csv', '.docx', '.docm', '.txt', '.pptx', '.pptm', '.pdf'].includes(ext);
   }
 
-  // --- EXTRACTION ---
-  public extractContent(filePath: string): { text: string; metadata: Record<string, any>; warnings: string[] } {
-    const ext = path.extname(filePath).toLowerCase();
-    const warnings: string[] = [];
-    let text = '';
-    const metadata: Record<string, any> = { extension: ext };
-
-    try {
-      const stats = fs.statSync(filePath);
-      metadata.size = stats.size;
-      metadata.created = stats.birthtime;
-      metadata.modified = stats.mtime;
-
-      if (ext === '.txt' || ext === '.csv') {
-        text = fs.readFileSync(filePath, 'utf-8');
-      } else if (['.docx', '.xlsx', '.pptx', '.pdf'].includes(ext)) {
-        // Read text safely from buffer
-        text = fs.readFileSync(filePath, 'utf-8');
-
-        if (ext === '.xlsx') {
-          if (text.includes('hidden_sheet') || text.includes('sheet_state_hidden')) {
-            warnings.push('Hidden Excel worksheet structure detected.');
-          }
-          if (text.includes('external_relationship') || text.includes('external_partner')) {
-            warnings.push('External link relationship detected in workbook.');
-          }
-        } else if (ext === '.docx') {
-          if (text.includes('ole_object') || text.includes('embedded_object')) {
-            warnings.push('Embedded OLE object or attachment identified.');
-          }
-        } else if (ext === '.pdf') {
-          if (text.includes('/JS') || text.includes('/JavaScript')) {
-            warnings.push('PDF contains interactive JavaScript actions.');
-          }
-        } else if (ext === '.pptx') {
-          if (text.includes('Hidden Slide')) {
-            warnings.push('Presentation contains hidden slides.');
-          }
-        }
-      }
-    } catch (err: any) {
-      warnings.push(`Extraction notice: ${err.message || 'Partial read'}`);
-    }
-
-    return { text, metadata, warnings };
+  // --- SAFE MODULAR EXTRACTION ---
+  public async extractContent(filePath: string, maxFileSizeMB: number = 50): Promise<ExtractionResult> {
+    return defaultRegistry.extract(filePath, maxFileSizeMB);
   }
 
   // --- RULE ENGINE ---
-  public evaluateRules(text: string, warnings: string[], rules: Rule[]): Finding[] {
+  public evaluateRules(extracted: ExtractionResult, rules: Rule[]): Finding[] {
     const findings: Finding[] = [];
     const activeRules = rules.filter(r => r.enabled);
+    const text = extracted.text || '';
+    const warnings = extracted.warnings || [];
 
     for (const rule of activeRules) {
       try {
@@ -136,13 +111,15 @@ export class FileScannerEngine {
         let matchCount = 0;
         while ((match = regex.exec(text)) !== null) {
           matchCount++;
-          if (matchCount > 10) break; // Limit finding explosion per rule
+          if (matchCount > 15) break; // Limit finding explosion per rule
 
           const rawSnippet = match[0];
-          // Redact sensitive values in snippet evidence for privacy
-          const redactedMatch = rawSnippet.length > 8 
-            ? `${rawSnippet.substring(0, 4)}****${rawSnippet.substring(rawSnippet.length - 4)}`
-            : '****';
+          const redactedMatch = this.redactEvidence(rawSnippet, rule.category);
+
+          // Build snippet context
+          const start = Math.max(0, match.index - 30);
+          const end = Math.min(text.length, match.index + match[0].length + 30);
+          const snippetText = text.substring(start, end).replace(/[\r\n]+/g, ' ');
 
           findings.push({
             finding_id: `FIND-${crypto.randomUUID().substring(0, 8)}`,
@@ -154,7 +131,7 @@ export class FileScannerEngine {
             description: rule.description,
             evidence: {
               match: redactedMatch,
-              snippet: `... ${text.substring(Math.max(0, match.index - 20), Math.min(text.length, match.index + match[0].length + 20)).replace(/[\r\n]+/g, ' ')} ...`
+              snippet: `... ${this.redactEvidence(snippetText, rule.category)} ...`
             },
             confidence: 0.95,
             source: 'RULE',
@@ -162,7 +139,7 @@ export class FileScannerEngine {
             created_at: new Date().toISOString()
           });
         }
-      } catch (e) {
+      } catch {
         // Fallback for simple includes if regex failed
         if (text.toLowerCase().includes(rule.name.toLowerCase())) {
           findings.push({
@@ -183,13 +160,20 @@ export class FileScannerEngine {
       }
     }
 
-    // Convert warnings into structural document findings
+    // Convert structural document warnings into findings
     for (const warn of warnings) {
+      if (warn.includes('exceeds configured limit')) continue; // Handled at file scan status level
+
+      let severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW' = 'MEDIUM';
+      if (warn.includes('VBA Macro') || warn.includes('JavaScript') || warn.includes('Launch')) {
+        severity = 'HIGH';
+      }
+
       findings.push({
         finding_id: `FIND-${crypto.randomUUID().substring(0, 8)}`,
         file_id: '',
         rule_id: 'DOC-003',
-        severity: 'MEDIUM',
+        severity,
         category: 'DOCUMENT',
         title: 'Potentially Risky Document Feature',
         description: warn,
@@ -202,6 +186,38 @@ export class FileScannerEngine {
     }
 
     return findings;
+  }
+
+  public redactEvidence(matchStr: string, category: string): string {
+    if (!matchStr || matchStr.length <= 2) return '****';
+
+    // Key-value pair redaction e.g., password=Secret123 -> password=Se****23
+    const kvMatch = matchStr.match(/^([^:=]+[:=]\s*)(.+)$/);
+    if (kvMatch) {
+      const key = kvMatch[1];
+      const val = kvMatch[2];
+      const redactedVal = val.length > 6 ? `${val.substring(0, 2)}****${val.substring(val.length - 2)}` : '****';
+      return `${key}${redactedVal}`;
+    }
+
+    // Email redaction
+    if (matchStr.includes('@')) {
+      const parts = matchStr.split('@');
+      const user = parts[0];
+      const domain = parts[1] || '';
+      const redUser = user.length > 2 ? `${user[0]}****${user[user.length - 1]}` : '*';
+      return `${redUser}@${domain}`;
+    }
+
+    if (category === 'SECRETS') {
+      return matchStr.length > 8
+        ? `${matchStr.substring(0, 3)}****${matchStr.substring(matchStr.length - 3)}`
+        : '****';
+    }
+
+    return matchStr.length > 10
+      ? `${matchStr.substring(0, 4)}****${matchStr.substring(matchStr.length - 4)}`
+      : '****';
   }
 
   // --- RISK SCORING & CLASSIFICATION ---
@@ -241,7 +257,7 @@ export class FileScannerEngine {
   }
 
   // --- SCAN ORCHESTRATION ---
-  public async startScan(rootPath: string, rules: Rule[]): Promise<ScanSession> {
+  public async startScan(rootPath: string, rules: Rule[], settings?: AppSettings): Promise<ScanSession> {
     const scanId = `SCAN-${crypto.randomUUID().substring(0, 8)}`;
     const startTime = new Date().toISOString();
 
@@ -278,19 +294,22 @@ export class FileScannerEngine {
     );
 
     // Run scanning in background async loop so API returns immediately
-    this.runScanTask(scanId, rootPath, rules).catch(err => {
+    this.runScanTask(scanId, rootPath, rules, settings).catch(err => {
       console.error(`[Scan Engine] Fatal error in scan ${scanId}:`, err);
     });
 
     return session;
   }
 
-  private async runScanTask(scanId: string, rootPath: string, rules: Rule[]) {
+  private async runScanTask(scanId: string, rootPath: string, rules: Rule[], settings?: AppSettings) {
     const session = this.activeScans.get(scanId);
     if (!session) return;
 
-    // Discover files
-    const allDiscovered = this.discoverFiles(rootPath);
+    const maxScanDepth = settings?.maxScanDepth ?? 10;
+    const maxFileSizeMB = settings?.maxFileSizeMB ?? 50;
+
+    // Discover files up to maxScanDepth
+    const allDiscovered = this.discoverFiles(rootPath, maxScanDepth);
     session.total_files = allDiscovered.length;
     session.supported_files = allDiscovered.length;
 
@@ -307,10 +326,48 @@ export class FileScannerEngine {
         const stats = fs.statSync(filePath);
         const sha256 = this.calculateSHA256(filePath);
         const fileId = `FILE-${crypto.randomUUID().substring(0, 8)}`;
-        const { text, metadata, warnings } = this.extractContent(filePath);
 
-        // Evaluate Rules
-        const findings = this.evaluateRules(text, warnings, rules);
+        // Check if file size exceeds configured limit before processing
+        if (stats.size > maxFileSizeMB * 1024 * 1024) {
+          const fileStmt = this.db.prepare(`
+            INSERT INTO files (
+              file_id, scan_id, path, filename, extension, size, sha256,
+              risk_score, classification, scan_status, created_at, modified_at,
+              extracted_text_preview, metadata_json, warnings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', ?, ?)
+          `);
+          fileStmt.run(
+            fileId,
+            scanId,
+            filePath,
+            path.basename(filePath),
+            path.extname(filePath).toLowerCase(),
+            stats.size,
+            sha256,
+            stats.birthtime.toISOString(),
+            stats.mtime.toISOString(),
+            JSON.stringify({ extension: path.extname(filePath).toLowerCase(), size: stats.size, skipped: true }),
+            JSON.stringify([`File exceeds configured maximum scan size (${maxFileSizeMB} MB)`])
+          );
+
+          session.processed_files++;
+          continue;
+        }
+
+        // Safe Modular Extraction
+        const extraction = await this.extractContent(filePath, maxFileSizeMB);
+        const text = extraction.text || '';
+        const metadata = extraction.metadata || {};
+        const warnings = extraction.warnings || [];
+
+        let scanStatus: 'SUCCESS' | 'ERROR' | 'SKIPPED' = 'SUCCESS';
+        if (metadata.error) {
+          scanStatus = 'ERROR';
+          session.error_count++;
+        }
+
+        // Evaluate Rules on full extracted text
+        const findings = this.evaluateRules(extraction, rules);
         for (const f of findings) {
           f.file_id = fileId;
         }
@@ -318,15 +375,14 @@ export class FileScannerEngine {
         const { score: riskScore, classification } = this.calculateRiskScore(findings);
 
         // Track stats counts
-        let hasCritical = false, hasHigh = false, hasMedium = false, hasLow = false;
         for (const f of findings) {
-          if (f.severity === 'CRITICAL') { session.critical_count++; hasCritical = true; }
-          else if (f.severity === 'HIGH') { session.high_count++; hasHigh = true; }
-          else if (f.severity === 'MEDIUM') { session.medium_count++; hasMedium = true; }
-          else if (f.severity === 'LOW') { session.low_count++; hasLow = true; }
+          if (f.severity === 'CRITICAL') session.critical_count++;
+          else if (f.severity === 'HIGH') session.high_count++;
+          else if (f.severity === 'MEDIUM') session.medium_count++;
+          else if (f.severity === 'LOW') session.low_count++;
         }
 
-        if (findings.length === 0) {
+        if (findings.length === 0 && scanStatus === 'SUCCESS') {
           session.safe_count++;
         }
 
@@ -348,7 +404,7 @@ export class FileScannerEngine {
           sha256,
           riskScore,
           classification,
-          'SUCCESS',
+          scanStatus,
           stats.birthtime.toISOString(),
           stats.mtime.toISOString(),
           text.substring(0, 500),

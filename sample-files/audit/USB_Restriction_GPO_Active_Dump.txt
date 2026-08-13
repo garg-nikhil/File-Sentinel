@@ -1,0 +1,5 @@
+ACTIVE GPO AUDIT LOG & CONFIGURATION EXPORT
+GPO Name: SEC-DISABLE-REMOVABLE-MEDIA
+Policy State: ENABLED
+System Dump Screenshot Export: USB Storage blocked via registry key StorPort=4.
+Implementation Proof: Active GPO configuration export attached.

@@ -9,11 +9,13 @@ import {
   History,
   Settings,
   Shield,
-  Radio
+  Radio,
+  FileCheck
 } from 'lucide-react';
 
 export type NavTab =
   | 'dashboard'
+  | 'audit'
   | 'scan'
   | 'files'
   | 'findings'
@@ -31,6 +33,7 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isScanning }) => {
   const menuItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'audit', label: 'Audit Compliance', icon: <FileCheck className="w-4 h-4" /> },
     { id: 'scan', label: 'Scanner', icon: <FolderSearch className="w-4 h-4" /> },
     { id: 'files', label: 'Scanned Files', icon: <FileText className="w-4 h-4" /> },
     { id: 'findings', label: 'Findings Log', icon: <AlertTriangle className="w-4 h-4" /> },

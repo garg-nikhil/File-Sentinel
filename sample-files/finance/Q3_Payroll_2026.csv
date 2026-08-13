@@ -1,0 +1,5 @@
+Employee_ID,Name,Email,Phone,Bank_Account,IFSC_Code,Monthly_Salary,Tax_PAN
+EMP-101,John Doe,john.doe@acme-corp.internal,+1-555-0198,987654321012,HDFC0001234,$12500,ABCDE1234F
+EMP-102,Jane Smith,jane.smith@acme-corp.internal,+1-555-0144,876543210987,ICIC0005678,$14200,XYZPS9876K
+EMP-103,Robert Chen,robert.chen@acme-corp.internal,+1-555-0182,567890123456,SBIN0008910,$18000,LMNOP5544Q
+EMP-104,Sarah Jenkins,sarah.jenkins@acme-corp.internal,+1-555-0112,345678901234,UTIB0002233,$11500,PQRST1122M

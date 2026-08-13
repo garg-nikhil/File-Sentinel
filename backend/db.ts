@@ -108,6 +108,62 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         status TEXT NOT NULL,
         details TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS audit_sessions (
+        audit_id TEXT PRIMARY KEY,
+        audit_date TEXT NOT NULL,
+        agency_name TEXT NOT NULL,
+        auditor_name TEXT NOT NULL,
+        status TEXT NOT NULL,
+        total_parameters INTEGER DEFAULT 0,
+        pass_count INTEGER DEFAULT 0,
+        fail_count INTEGER DEFAULT 0,
+        review_count INTEGER DEFAULT 0,
+        not_found_count INTEGER DEFAULT 0,
+        fatal_failures_count INTEGER DEFAULT 0,
+        overall_score INTEGER DEFAULT 0,
+        max_score INTEGER DEFAULT 200,
+        overall_status TEXT NOT NULL,
+        category_scores_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_parameter_results (
+        audit_id TEXT NOT NULL,
+        parameter_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        confidence REAL DEFAULT 1.0,
+        fatal INTEGER DEFAULT 0,
+        score_earned REAL DEFAULT 0,
+        max_score REAL DEFAULT 0,
+        policy_status TEXT,
+        pv_status TEXT,
+        evidence_json TEXT,
+        reason TEXT,
+        missing_requirements_json TEXT,
+        warnings_json TEXT,
+        ai_recommendation_json TEXT,
+        override_json TEXT,
+        PRIMARY KEY (audit_id, parameter_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS checklist_parameters (
+        id TEXT PRIMARY KEY,
+        category TEXT NOT NULL,
+        category_name TEXT NOT NULL,
+        category_weight REAL DEFAULT 100,
+        parameter TEXT NOT NULL,
+        fatal INTEGER DEFAULT 0,
+        severity TEXT DEFAULT 'HIGH',
+        required_evidence_json TEXT,
+        keywords_json TEXT,
+        logic TEXT DEFAULT 'SINGLE',
+        distinguish_policy INTEGER DEFAULT 0,
+        requires_human_review INTEGER DEFAULT 0,
+        evaluation_rules_json TEXT,
+        enabled INTEGER DEFAULT 1
+      );
     `);
 
     // Seed default built-in rules if table is empty

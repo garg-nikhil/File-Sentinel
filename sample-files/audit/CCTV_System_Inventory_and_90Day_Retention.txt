@@ -1,0 +1,4 @@
+CCTV SURVEILLANCE SYSTEM & STORAGE CONFIGURATION
+CCTV Installed: 12 High-Definition Cameras covering entrances, lending bays, and server room.
+Retention Settings: NVR Storage Array configured for 90 days retention minimum (Auto-archive enabled).
+Storage Configuration: 16TB RAID-5 Storage Array active.

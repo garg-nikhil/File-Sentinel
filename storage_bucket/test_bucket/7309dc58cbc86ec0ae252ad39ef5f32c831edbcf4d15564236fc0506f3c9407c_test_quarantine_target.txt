@@ -1,0 +1,2 @@
+TOP_SECRET_CREDENTIAL_DATA
+aws_secret_access_key=SecretVal123

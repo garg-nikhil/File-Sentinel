@@ -1,0 +1,38 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /JS (app.alert('PDF JavaScript Execution Attempt')) /Launch (cmd.exe) >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 300 >>
+stream
+BT
+/F1 12 Tf
+100 700 Td
+(ANNUAL SECURITY AND FINANCIAL AUDIT REPORT 2026) Tj
+0 -20 Td
+(CONFIDENTIAL - INTERNAL USE ONLY) Tj
+0 -20 Td
+(Server DB: postgres://dbuser:DbPass2026@10.0.1.99:5432/finance_db) Tj
+0 -20 Td
+(API Key: AIzaSyD091283EXAMPLESECRET) Tj
+ET
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f 
+0000000009 00000 n 
+0000000115 00000 n 
+0000000174 00000 n 
+0000000263 00000 n 
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+600
+%%EOF

@@ -1,0 +1,5 @@
+AGENCY ACCESS CONTROL & BIOMETRIC SYSTEM CONFIGURATION
+System: BioEntry W2 Fingerprint & Card Reader System
+Physical Security: Badge reader & Door Access Controller active
+Access Policy: Restricts entrance to authorized lending staff only
+Implementation Log: Daily biometric door entry scans enabled. Door Access Controller IP: 192.168.10.15

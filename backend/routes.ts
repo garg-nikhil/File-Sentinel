@@ -4,16 +4,20 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { getDatabase } from './db.js';
 import { FileScannerEngine } from './scannerEngine.js';
-import { LocalCloudStorageProvider } from './quarantineService.js';
+import { getCloudStorageProvider } from './quarantineService.js';
 import { analyzeContentWithGemini } from './gemini.js';
 import { ensureSampleFilesExist } from './sample_data.js';
 import { Rule, AppSettings, AuditEvent } from '../src/types.js';
+import { EvidenceEngine } from './audit/evidenceEngine.js';
+import { AuditReportGenerator } from './audit/auditReport.js';
+import { INITIAL_AUDIT_CHECKLIST } from './audit/checklist.js';
+import { AuditScoringEngine } from './audit/scoring.js';
 
 export function createApiRouter() {
   const router = express.Router();
   const db = getDatabase();
   const scannerEngine = new FileScannerEngine(db);
-  const cloudStorage = new LocalCloudStorageProvider();
+  const cloudStorage = getCloudStorageProvider();
 
   // App Settings default state
   let currentSettings: AppSettings = {
@@ -27,7 +31,7 @@ export function createApiRouter() {
   };
 
   // Ensure initial sample files exist on server boot
-  ensureSampleFilesExist('./sample-files');
+  ensureSampleFilesExist('./sample-files').catch(err => console.error('Sample files init error:', err));
 
   // Helper for audit logging
   function logAuditEvent(action: string, filePath?: string, sha256?: string, status: 'SUCCESS' | 'WARNING' | 'ERROR' = 'SUCCESS', details?: string) {
@@ -88,7 +92,7 @@ export function createApiRouter() {
       isBuiltIn: Boolean(r.is_builtin)
     }));
 
-    const session = await scannerEngine.startScan(targetPath, activeRules);
+    const session = await scannerEngine.startScan(targetPath, activeRules, currentSettings);
     logAuditEvent('START_SCAN', targetPath, undefined, 'SUCCESS', `Scan ID: ${session.scan_id}`);
 
     res.json(session);
@@ -329,6 +333,18 @@ export function createApiRouter() {
     const fileRow = db.prepare('SELECT * FROM files WHERE file_id = ?').get(file_id) as any;
     if (!fileRow) return res.status(404).json({ error: 'File record not found' });
 
+    // Check idempotency state machine
+    const existingQ = db.prepare('SELECT * FROM quarantine_items WHERE file_id = ? ORDER BY quarantined_at DESC LIMIT 1').get(file_id) as any;
+    if (existingQ) {
+      if (existingQ.upload_status === 'UPLOADING' || existingQ.deletion_status === 'DELETING' || existingQ.deletion_status === 'DELETED') {
+        return res.status(409).json({
+          success: false,
+          error: `Operation already in progress or completed (upload_status: ${existingQ.upload_status}, deletion_status: ${existingQ.deletion_status})`,
+          state: existingQ.deletion_status === 'DELETED' ? 'DELETED' : existingQ.upload_status
+        });
+      }
+    }
+
     const localPath = fileRow.path;
     const sha256 = fileRow.sha256;
     const cloudObjectName = `${sha256}_${fileRow.filename}`;
@@ -338,17 +354,37 @@ export function createApiRouter() {
       logs.push(`[${new Date().toISOString()}] ${msg}`);
     };
 
+    const qId = existingQ ? existingQ.id : `Q-${crypto.randomUUID().substring(0, 8)}`;
+    const nowStr = new Date().toISOString();
+
+    if (!existingQ) {
+      db.prepare(`
+        INSERT INTO quarantine_items (
+          id, file_id, original_path, filename, sha256, size, cloud_object,
+          upload_status, verification_status, deletion_status, quarantined_at, logs_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPLOADING', 'PENDING', 'PENDING', ?, ?)
+      `).run(qId, file_id, localPath, fileRow.filename, sha256, fileRow.size, cloudObjectName, nowStr, JSON.stringify(logs));
+    } else {
+      db.prepare(`
+        UPDATE quarantine_items
+        SET upload_status = 'UPLOADING', logs_json = ?
+        WHERE id = ?
+      `).run(JSON.stringify(logs), qId);
+    }
+
     addLog(`Initiating Upload & Remove pipeline for file: ${localPath}`);
 
     // STEP 1: Local file existence and SHA-256 recalculation check
     if (!fs.existsSync(localPath)) {
       addLog(`ERROR: Local file missing at path ${localPath}. Operation aborted.`);
+      db.prepare(`UPDATE quarantine_items SET upload_status = 'UPLOAD_FAILED', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
       return res.status(400).json({ success: false, logs, error: 'Local file missing before upload' });
     }
 
     const currentHash = scannerEngine.calculateSHA256(localPath);
     if (currentHash !== sha256) {
       addLog(`ERROR: File SHA-256 hash mismatch! Original: ${sha256}, Current: ${currentHash}`);
+      db.prepare(`UPDATE quarantine_items SET upload_status = 'UPLOAD_FAILED', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
       return res.status(400).json({ success: false, logs, error: 'SHA-256 checksum verification failed' });
     }
     addLog(`Local pre-upload checksum verified: ${sha256}`);
@@ -360,9 +396,11 @@ export function createApiRouter() {
       addLog('ERROR: Cloud storage upload failed or returned non-success response.');
       addLog('PROTECTION RULE ENFORCED: Local file remains UNTOUCHED.');
       logAuditEvent('CLOUD_UPLOAD_FAILED', localPath, sha256, 'ERROR', 'Upload failure. Local file preserved.');
+      db.prepare(`UPDATE quarantine_items SET upload_status = 'UPLOAD_FAILED', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
       return res.status(500).json({ success: false, logs, error: 'Cloud upload failed. Local file was preserved.' });
     }
     addLog('Cloud upload request returned success.');
+    db.prepare(`UPDATE quarantine_items SET upload_status = 'UPLOADED', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
 
     // STEP 3: Verification of Remote Cloud Object Identity
     addLog('Verifying remote object existence and matching SHA-256 hash in cloud...');
@@ -372,12 +410,15 @@ export function createApiRouter() {
       addLog('ERROR: Cloud verification failed! Object not found or hash mismatch in cloud.');
       addLog('PROTECTION RULE ENFORCED: Local file remains UNTOUCHED.');
       logAuditEvent('CLOUD_VERIFY_FAILED', localPath, sha256, 'ERROR', 'Verification failure. Local file preserved.');
+      db.prepare(`UPDATE quarantine_items SET verification_status = 'VERIFICATION_FAILED', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
       return res.status(500).json({ success: false, logs, error: 'Cloud verification failed. Local file was preserved.' });
     }
     addLog('Cloud object verified successfully! Remote SHA-256 matches local identity.');
+    db.prepare(`UPDATE quarantine_items SET verification_status = 'VERIFIED', verified_at = ?, logs_json = ? WHERE id = ?`).run(new Date().toISOString(), JSON.stringify(logs), qId);
 
     // STEP 4: Local Deletion ONLY after Verified Upload
     addLog('Proceeding to local file deletion step...');
+    db.prepare(`UPDATE quarantine_items SET deletion_status = 'DELETING', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
     let localDeleted = false;
     try {
       fs.unlinkSync(localPath);
@@ -389,35 +430,14 @@ export function createApiRouter() {
     if (!localDeleted) {
       addLog('WARNING: Local deletion execution failed or file still exists on disk.');
       logAuditEvent('LOCAL_DELETE_FAILED', localPath, sha256, 'WARNING', 'Cloud verified, but local deletion failed.');
+      db.prepare(`UPDATE quarantine_items SET deletion_status = 'DELETION_FAILED', logs_json = ? WHERE id = ?`).run(JSON.stringify(logs), qId);
       return res.status(500).json({ success: false, logs, error: 'Cloud upload verified, but local file deletion failed.' });
     }
 
     addLog('SUCCESS: Local file verified deleted from disk.');
     logAuditEvent('VERIFIED_UPLOAD_AND_DELETE', localPath, sha256, 'SUCCESS', 'File safely stored in cloud and removed locally.');
 
-    // Update DB Quarantine Record
-    const qStmt = db.prepare(`
-      INSERT INTO quarantine_items (
-        id, file_id, original_path, filename, sha256, size, cloud_object,
-        upload_status, verification_status, deletion_status, quarantined_at, verified_at, deleted_at, logs_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'UPLOADED', 'VERIFIED', 'DELETED', ?, ?, ?, ?)
-    `);
-
-    const qId = `Q-${crypto.randomUUID().substring(0, 8)}`;
-    const nowStr = new Date().toISOString();
-    qStmt.run(
-      qId,
-      file_id,
-      localPath,
-      fileRow.filename,
-      sha256,
-      fileRow.size,
-      cloudObjectName,
-      nowStr,
-      nowStr,
-      nowStr,
-      JSON.stringify(logs)
-    );
+    db.prepare(`UPDATE quarantine_items SET deletion_status = 'DELETED', deleted_at = ?, logs_json = ? WHERE id = ?`).run(new Date().toISOString(), JSON.stringify(logs), qId);
 
     res.json({
       success: true,
@@ -458,6 +478,304 @@ export function createApiRouter() {
   router.get('/audit-logs', (req: Request, res: Response) => {
     const rows = db.prepare('SELECT * FROM audit_events ORDER BY timestamp DESC LIMIT 100').all();
     res.json(rows);
+  });
+
+  // --- AUDIT COMPLIANCE ENDPOINTS ---
+  const evidenceEngine = new EvidenceEngine(db);
+
+  // Trigger Audit Compliance Scan
+  router.post('/audit/run', async (req: Request, res: Response) => {
+    try {
+      const { target_dir, audit_date, agency_name, auditor_name } = req.body;
+      const targetDir = target_dir || path.resolve('./sample-files');
+
+      if (!fs.existsSync(targetDir)) {
+        return res.status(400).json({ error: `Directory target does not exist: ${targetDir}` });
+      }
+
+      // Collect file paths
+      const filePaths: string[] = [];
+      function collectFiles(dir: string) {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory()) collectFiles(fullPath);
+          else filePaths.push(fullPath);
+        }
+      }
+      collectFiles(targetDir);
+
+      const session = await evidenceEngine.runAuditScan(
+        filePaths,
+        audit_date || new Date().toISOString().split('T')[0],
+        agency_name || 'Primary Telecalling & Collection Agency',
+        auditor_name || 'Automated Compliance Inspector'
+      );
+
+      logAuditEvent('RUN_AUDIT_COMPLIANCE', targetDir, undefined, 'SUCCESS', `Audit ID: ${session.audit_id}, Score: ${session.overall_score}`);
+      res.json(session);
+    } catch (err: any) {
+      console.error('[API] Audit run error:', err);
+      res.status(500).json({ error: err.message || 'Audit execution failed' });
+    }
+  });
+
+  // List past audit sessions
+  router.get('/audit/sessions', (req: Request, res: Response) => {
+    try {
+      const rows = db.prepare('SELECT * FROM audit_sessions ORDER BY created_at DESC LIMIT 50').all() as any[];
+      const sessions = rows.map(r => ({
+        ...r,
+        category_scores: r.category_scores_json ? JSON.parse(r.category_scores_json) : {}
+      }));
+      res.json(sessions);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get specific audit session details with parameters and evidence
+  router.get('/audit/session/:id', (req: Request, res: Response) => {
+    try {
+      const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
+      if (!sessionRow) {
+        return res.status(404).json({ error: 'Audit session not found' });
+      }
+
+      const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(req.params.id) as any[];
+
+      const activeChecklistMap = new Map(INITIAL_AUDIT_CHECKLIST.map(p => [p.id, p]));
+
+      const parameterResults = paramRows.map(pr => {
+        const checklistParam = activeChecklistMap.get(pr.parameter_id) || {
+          id: pr.parameter_id,
+          category: 'ZERO_TOLERANCE',
+          category_name: 'Audit Parameter',
+          category_weight: 100,
+          parameter: pr.parameter_id,
+          fatal: Boolean(pr.fatal),
+          severity: 'HIGH',
+          required_evidence: [],
+          keywords: [],
+          logic: 'SINGLE',
+          evaluation_rules: [],
+          enabled: true
+        };
+
+        return {
+          parameter_id: pr.parameter_id,
+          parameter: checklistParam,
+          status: pr.status,
+          confidence: pr.confidence,
+          fatal: Boolean(pr.fatal),
+          score_earned: pr.score_earned,
+          max_score: pr.max_score,
+          policy_status: pr.policy_status,
+          pv_status: pr.pv_status,
+          evidence: pr.evidence_json ? JSON.parse(pr.evidence_json) : [],
+          reason: pr.reason,
+          missing_requirements: pr.missing_requirements_json ? JSON.parse(pr.missing_requirements_json) : [],
+          warnings: pr.warnings_json ? JSON.parse(pr.warnings_json) : [],
+          ai_recommendation: pr.ai_recommendation_json ? JSON.parse(pr.ai_recommendation_json) : undefined,
+          override: pr.override_json ? JSON.parse(pr.override_json) : undefined
+        };
+      });
+
+      const session = {
+        ...sessionRow,
+        category_scores: sessionRow.category_scores_json ? JSON.parse(sessionRow.category_scores_json) : {},
+        parameter_results: parameterResults
+      };
+
+      res.json(session);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Auditor Override Endpoint
+  router.post('/audit/override', (req: Request, res: Response) => {
+    try {
+      const { audit_id, parameter_id, new_status, auditor_name, comment } = req.body;
+
+      if (!audit_id || !parameter_id || !new_status || !auditor_name) {
+        return res.status(400).json({ error: 'Missing required override fields' });
+      }
+
+      // Fetch existing result
+      const row = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ? AND parameter_id = ?').get(audit_id, parameter_id) as any;
+      if (!row) {
+        return res.status(404).json({ error: 'Audit parameter result not found' });
+      }
+
+      const override = {
+        original_status: row.status,
+        new_status,
+        auditor_name,
+        comment: comment || 'Manual auditor override applied',
+        timestamp: new Date().toISOString()
+      };
+
+      // Update parameter result in DB
+      db.prepare(`
+        UPDATE audit_parameter_results
+        SET override_json = ?
+        WHERE audit_id = ? AND parameter_id = ?
+      `).run(JSON.stringify(override), audit_id, parameter_id);
+
+      // Recalculate Audit Session Scores
+      const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(audit_id) as any;
+      const allParamRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(audit_id) as any[];
+
+      const checklistMap = new Map(INITIAL_AUDIT_CHECKLIST.map(p => [p.id, p]));
+
+      const fullResults = allParamRows.map(pr => ({
+        parameter_id: pr.parameter_id,
+        parameter: checklistMap.get(pr.parameter_id) || INITIAL_AUDIT_CHECKLIST[0],
+        status: pr.status,
+        confidence: pr.confidence,
+        fatal: Boolean(pr.fatal),
+        score_earned: pr.score_earned,
+        max_score: pr.max_score,
+        policy_status: pr.policy_status,
+        pv_status: pr.pv_status,
+        evidence: pr.evidence_json ? JSON.parse(pr.evidence_json) : [],
+        reason: pr.reason,
+        missing_requirements: pr.missing_requirements_json ? JSON.parse(pr.missing_requirements_json) : [],
+        warnings: pr.warnings_json ? JSON.parse(pr.warnings_json) : [],
+        override: pr.override_json ? JSON.parse(pr.override_json) : undefined
+      }));
+
+      const updatedSession = AuditScoringEngine.calculateAuditSummary(
+        audit_id,
+        sessionRow.agency_name,
+        sessionRow.auditor_name,
+        sessionRow.audit_date,
+        fullResults as any
+      );
+
+      // Save updated totals to session
+      db.prepare(`
+        UPDATE audit_sessions
+        SET pass_count = ?, fail_count = ?, review_count = ?, not_found_count = ?,
+            fatal_failures_count = ?, overall_score = ?, overall_status = ?,
+            category_scores_json = ?, updated_at = ?
+        WHERE audit_id = ?
+      `).run(
+        updatedSession.pass_count,
+        updatedSession.fail_count,
+        updatedSession.review_count,
+        updatedSession.not_found_count,
+        updatedSession.fatal_failures_count,
+        updatedSession.overall_score,
+        updatedSession.overall_status,
+        JSON.stringify(updatedSession.category_scores),
+        new Date().toISOString(),
+        audit_id
+      );
+
+      logAuditEvent('AUDITOR_OVERRIDE', audit_id, undefined, 'SUCCESS', `Parameter ${parameter_id} overridden to ${new_status} by ${auditor_name}`);
+
+      res.json({ success: true, override, session: updatedSession });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get Active Checklist Parameters
+  router.get('/audit/checklist', (req: Request, res: Response) => {
+    res.json(INITIAL_AUDIT_CHECKLIST);
+  });
+
+  // Get Evidence Gaps
+  router.get('/audit/gaps/:id', (req: Request, res: Response) => {
+    try {
+      const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
+      if (!sessionRow) {
+        return res.status(404).json({ error: 'Audit session not found' });
+      }
+
+      const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(req.params.id) as any[];
+      const activeChecklistMap = new Map(INITIAL_AUDIT_CHECKLIST.map(p => [p.id, p]));
+
+      const parameterResults = paramRows.map(pr => ({
+        parameter_id: pr.parameter_id,
+        parameter: activeChecklistMap.get(pr.parameter_id) || INITIAL_AUDIT_CHECKLIST[0],
+        status: pr.status,
+        confidence: pr.confidence,
+        fatal: Boolean(pr.fatal),
+        score_earned: pr.score_earned,
+        max_score: pr.max_score,
+        evidence: pr.evidence_json ? JSON.parse(pr.evidence_json) : [],
+        reason: pr.reason,
+        missing_requirements: pr.missing_requirements_json ? JSON.parse(pr.missing_requirements_json) : [],
+        warnings: pr.warnings_json ? JSON.parse(pr.warnings_json) : [],
+        override: pr.override_json ? JSON.parse(pr.override_json) : undefined
+      }));
+
+      const session = {
+        ...sessionRow,
+        category_scores: sessionRow.category_scores_json ? JSON.parse(sessionRow.category_scores_json) : {},
+        parameter_results: parameterResults
+      };
+
+      const gaps = evidenceEngine.generateEvidenceGaps(session as any);
+      res.json(gaps);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Export Audit Report
+  router.get('/audit/report/:id/:format', (req: Request, res: Response) => {
+    try {
+      const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
+      if (!sessionRow) {
+        return res.status(404).json({ error: 'Audit session not found' });
+      }
+
+      const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(req.params.id) as any[];
+      const activeChecklistMap = new Map(INITIAL_AUDIT_CHECKLIST.map(p => [p.id, p]));
+
+      const parameterResults = paramRows.map(pr => ({
+        parameter_id: pr.parameter_id,
+        parameter: activeChecklistMap.get(pr.parameter_id) || INITIAL_AUDIT_CHECKLIST[0],
+        status: pr.status,
+        confidence: pr.confidence,
+        fatal: Boolean(pr.fatal),
+        score_earned: pr.score_earned,
+        max_score: pr.max_score,
+        policy_status: pr.policy_status,
+        pv_status: pr.pv_status,
+        evidence: pr.evidence_json ? JSON.parse(pr.evidence_json) : [],
+        reason: pr.reason,
+        missing_requirements: pr.missing_requirements_json ? JSON.parse(pr.missing_requirements_json) : [],
+        warnings: pr.warnings_json ? JSON.parse(pr.warnings_json) : [],
+        override: pr.override_json ? JSON.parse(pr.override_json) : undefined
+      }));
+
+      const session = {
+        ...sessionRow,
+        category_scores: sessionRow.category_scores_json ? JSON.parse(sessionRow.category_scores_json) : {},
+        parameter_results: parameterResults
+      };
+
+      const format = req.params.format.toLowerCase();
+      if (format === 'json') {
+        res.setHeader('Content-Type', 'application/json');
+        res.setHeader('Content-Disposition', `attachment; filename="AuditReport_${session.audit_id}.json"`);
+        return res.send(AuditReportGenerator.generateJson(session as any));
+      } else if (format === 'csv') {
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="AuditReport_${session.audit_id}.csv"`);
+        return res.send(AuditReportGenerator.generateCsv(session as any));
+      } else {
+        res.setHeader('Content-Type', 'text/html');
+        return res.send(AuditReportGenerator.generateHtml(session as any));
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   return router;

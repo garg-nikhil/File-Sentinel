@@ -83,12 +83,12 @@ export const BUILTIN_RULES: Rule[] = [
   },
   {
     id: 'PII-004',
-    name: 'Aadhaar-like Identifier',
+    name: 'Potential Aadhaar-like identifier',
     category: 'PII',
     severity: 'HIGH',
     enabled: true,
-    pattern: '\\b[2-9]{1}\\d{3}\\s?\\d{4}\\s?\\d{4}\\b',
-    description: 'Format matching 12-digit identity number pattern.',
+    pattern: '(?i)(?:(?:aadhaar|aadhar|uidai|uid|identity\\s*no|govt\\s*id|national\\s*id)[\\s\\S]{0,50}?\\b[2-9]\\d{3}[\\s-]?\\d{4}[\\s-]?\\d{4}\\b|\\b[2-9]\\d{3}[\\s-]\\d{4}[\\s-]\\d{4}\\b)',
+    description: 'Detects 12-digit Indian national identity Aadhaar numbers with structural formatting (spaces/hyphens) or explicit contextual keywords.',
     recommendation: 'Redact national identity digits to comply with privacy laws.',
     isBuiltIn: true
   },

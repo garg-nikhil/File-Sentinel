@@ -1,0 +1,15 @@
+================================================
+INTERNAL NETWORK ARCHITECTURE & CREDENTIAL SUMMARY
+================================================
+Primary Gateway: 10.0.0.1
+VPN Endpoint: 172.16.10.5
+DB Server Cluster: 10.0.1.45, 10.0.1.46
+Staging Server: 192.168.1.100
+
+SSH Access Config:
+Host prod-app-01
+  HostName 10.0.2.15
+  User ubuntu
+  IdentityFile ~/.ssh/id_rsa_prod
+
+Internal Admin Portal Password: password = AdminPassword2026!
