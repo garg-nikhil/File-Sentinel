@@ -581,10 +581,36 @@ export function createApiRouter() {
         };
       });
 
+      // Load entities and conflicts
+      let entities: any[] = [];
+      let entityConflicts: any[] = [];
+      try {
+        const entityRows = db.prepare('SELECT * FROM audit_entities WHERE audit_id = ?').all(req.params.id) as any[];
+        entities = entityRows.map(e => ({
+          ...e,
+          identifiers: e.identifiers_json ? JSON.parse(e.identifiers_json) : {},
+          evidenceReferences: e.evidence_references_json ? JSON.parse(e.evidence_references_json) : [],
+          matchingSignals: e.matching_signals_json ? JSON.parse(e.matching_signals_json) : [],
+          conflicts: e.conflicts_json ? JSON.parse(e.conflicts_json) : []
+        }));
+
+        const conflictRows = db.prepare('SELECT * FROM audit_entity_conflicts WHERE audit_id = ?').all(req.params.id) as any[];
+        entityConflicts = conflictRows.map(c => ({
+          ...c,
+          involvedEvidence: c.involved_evidence_json ? JSON.parse(c.involved_evidence_json) : [],
+          conflictingAttributes: c.conflicting_attributes_json ? JSON.parse(c.conflicting_attributes_json) : {}
+        }));
+      } catch (e) {
+        // Fallback gracefully if table not yet queried
+      }
+
       const session = {
         ...sessionRow,
         category_scores: sessionRow.category_scores_json ? JSON.parse(sessionRow.category_scores_json) : {},
-        parameter_results: parameterResults
+        parameter_results: parameterResults,
+        entities,
+        entity_conflicts: entityConflicts,
+        entityConflicts
       };
 
       res.json(session);

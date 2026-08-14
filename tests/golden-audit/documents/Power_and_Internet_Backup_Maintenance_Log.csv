@@ -1,0 +1,6 @@
+# POWER BACKUP UPS BACKUP DG SET GENERATOR SECONDARY ISP FAILOVER INTERNET MAINTENANCE LOG
+Asset_Type,Asset_ID,Vendor_ISP,Capacity_Bandwidth,Last_Inspection_Date,Failover_Test_Result,Status
+Power Backup (UPS),UPS-40KVA-01,Schneider Electric APC,40 kVA Online UPS,2026-07-15,4 Hours Battery Backup Test OK,OPERATIONAL
+Power Backup (Generator),DG-SET-125KVA,Cummins Diesel Power,125 kVA Auto-Start DG,2026-07-20,Auto Mains Failure (AMF) Test OK,OPERATIONAL
+Primary Internet Leased Line,ISP-LINK-01,Tata Tele Business Services,100 Mbps 1:1 Leased Line,2026-08-01,Primary Link Up,ACTIVE
+Internet Backup (Secondary ISP),ISP-LINK-02,Airtel Enterprise Broadband,100 Mbps Dual-WAN Failover,2026-08-01,Failover Test 0 Packet Loss,ACTIVE_STANDBY

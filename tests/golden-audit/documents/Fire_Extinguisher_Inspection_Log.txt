@@ -1,0 +1,19 @@
+SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET
+FIRE SAFETY EQUIPMENT & FIRE EXTINGUISHER INSPECTION LOG
+Facility: Tech Park Alpha, 4th Floor
+
+EXTINGUISHER AUDIT RECORDS:
+1. Cylinder Tag: FE-ABC-01 (Location: Bay 4 Entrance)
+   Type: ABC Dry Chemical Powder (6 KG)
+   Pressure Gauge Status: GREEN / NORMAL OPERATING PRESSURE
+   Physical Condition: Serviceable, Pin and Seal Intact, Available on Wall Mount
+   Last Refill Date: 2026-05-15
+   Next Refill Due Date: 2027-05-15
+   Inspection Result: FUNCTIONAL & NOT EXPIRED
+
+2. Cylinder Tag: FE-CO2-02 (Location: Server Room)
+   Type: CO2 Carbon Dioxide (4.5 KG)
+   Pressure Gauge Status: OK / SERVICEABLE
+   Last Refill Date: 2026-05-15
+   Next Refill Due Date: 2027-05-15
+   Inspection Result: FUNCTIONAL & NOT EXPIRED

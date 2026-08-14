@@ -164,6 +164,36 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         evaluation_rules_json TEXT,
         enabled INTEGER DEFAULT 1
       );
+
+      CREATE TABLE IF NOT EXISTS audit_entities (
+        entity_id TEXT NOT NULL,
+        audit_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        normalized_name TEXT NOT NULL,
+        identifiers_json TEXT,
+        evidence_references_json TEXT,
+        matching_signals_json TEXT,
+        confidence REAL DEFAULT 1.0,
+        status TEXT NOT NULL,
+        conflicts_json TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (audit_id, entity_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_entity_conflicts (
+        id TEXT PRIMARY KEY,
+        audit_id TEXT NOT NULL,
+        entity_id TEXT NOT NULL,
+        conflict_type TEXT NOT NULL,
+        severity TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        involved_evidence_json TEXT,
+        conflicting_attributes_json TEXT,
+        created_at TEXT NOT NULL
+      );
     `);
 
     // Seed default built-in rules if table is empty

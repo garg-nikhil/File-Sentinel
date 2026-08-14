@@ -1,0 +1,5 @@
+# VISITOR REGISTER & VISITOR ENTRY LOGBOOK - ACTIVE VISITOR LOG
+Entry_ID,Date,Visitor_Name,Company_Represented,Person_To_Meet,Badge_Issued,Time_In,Time_Out,Purpose
+VIS-2026-0801,2026-08-01,Robert Taylor,Fire Safety Inspection Bureau,Safety Officer,VIS-01,10:15 AM,11:45 AM,Annual Equipment Review
+VIS-2026-0803,2026-08-03,Sunil Sharma,Schneider Electric UPS AMC,IT Systems Lead,VIS-02,02:30 PM,04:00 PM,Quarterly Battery Maintenance
+VIS-2026-0808,2026-08-08,Pooja Mehta,Telecom Line Engineer,Network Admin,VIS-03,11:00 AM,12:15 PM,Fiber Link Speed Verification

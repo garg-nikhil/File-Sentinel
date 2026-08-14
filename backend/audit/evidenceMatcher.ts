@@ -2,9 +2,22 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { ExtractionResult } from '../extractors/base.js';
 import { AuditParameter, EvidenceItem } from './models.js';
-import { DateEvaluator } from './dateEvaluator.js';
+import { EvidenceValidator } from './evidenceValidator.js';
 
 export class EvidenceMatcher {
+  /**
+   * Compatibility alias for evaluateEvidence
+   */
+  public evaluateEvidence(
+    fileId: string,
+    filename: string,
+    filePath: string,
+    parameter: AuditParameter,
+    extraction: ExtractionResult
+  ): EvidenceItem | null {
+    return this.matchDocumentToParameter(fileId, filePath, extraction, parameter);
+  }
+
   /**
    * Evaluates a single document against a specific audit parameter to see if it qualifies as evidence
    */
@@ -19,18 +32,38 @@ export class EvidenceMatcher {
     const textLower = text.toLowerCase();
     const filenameLower = filename.toLowerCase();
 
-    // 1. Multi-signal evidence evaluation
+    // 1. Stage 1: Candidate Discovery
     let filenameMatch = false;
     let contentMatch = false;
-    let metadataMatch = false;
-    let entityMatch = false;
-    let fieldValidation = false;
-    let semanticMatch = false;
-
     let matchedKeywordsInFilename = 0;
     let matchedKeywordsInContent = 0;
 
-    for (const kw of parameter.keywords) {
+    const allKeywords = new Set<string>();
+    if (parameter.keywords) {
+      for (const kw of parameter.keywords) {
+        if (kw) allKeywords.add(kw);
+      }
+    }
+    if (parameter.requirements) {
+      for (const req of parameter.requirements) {
+        if (req.keywords) {
+          for (const k of req.keywords) if (k) allKeywords.add(k);
+        }
+        if (req.evidence_types) {
+          for (const t of req.evidence_types) if (t) allKeywords.add(t.replace(/_/g, ' '));
+        }
+        if (req.name) allKeywords.add(req.name);
+        if (req.title) allKeywords.add(req.title);
+      }
+    }
+    if (parameter.sub_controls) {
+      for (const sub of parameter.sub_controls) {
+        if (sub) allKeywords.add(sub.replace(/_/g, ' '));
+      }
+    }
+
+    for (const kw of allKeywords) {
+      if (!kw || typeof kw !== 'string') continue;
       const kwLower = kw.toLowerCase();
       if (filenameLower.includes(kwLower)) {
         matchedKeywordsInFilename++;
@@ -42,77 +75,71 @@ export class EvidenceMatcher {
       }
     }
 
-    // Baseline threshold: Must have at least a filename match or content match
+    // Baseline threshold: Must have at least a filename match or content match to be a candidate
     if (!filenameMatch && !contentMatch) {
       return null;
     }
 
     const isFilenameOnly = filenameMatch && !contentMatch;
-    const isCandidate = true;
-    const satisfiesControl = contentMatch || (filenameMatch && parameter.allow_filename_only === true);
+    const isContentOnly = contentMatch && !filenameMatch;
+    const candidate = true;
 
-    // 2. Extract Structured Fields & Metadata
-    const extractedDates = DateEvaluator.extractDatesFromText(text);
-    const personName = this.extractPersonName(text);
+    // 2. Stage 2: Evidence Classification & Validation
     const policyVsImpl = this.classifyPolicyVsImplementation(filename, text);
+    let valRes = EvidenceValidator.validate(filename, text, parameter, policyVsImpl);
 
-    if (personName || extractedDates.issueDate || extractedDates.expiryDate) {
-      metadataMatch = true;
-    }
-
-    // Specific entity extraction per parameter category
-    const extractedFields: Record<string, any> = {
-      person_name: personName,
-      issue_date: extractedDates.issueDate,
-      expiry_date: extractedDates.expiryDate,
-      all_dates: extractedDates.allDates,
-      is_policy: policyVsImpl.isPolicy,
-      is_implementation: policyVsImpl.isImplementation,
-      policy_type: policyVsImpl.type,
-      matched_keywords_count: matchedKeywordsInContent + matchedKeywordsInFilename,
-      structure_warnings: extraction.warnings || []
-    };
-
-    if (parameter.id === 'ZTI-001') {
-      const gstinMatch = text.match(/\b\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z0-9]{1}Z[A-Z0-9]{1}\b/);
-      if (gstinMatch) {
-        extractedFields['gstin'] = gstinMatch[0];
-        entityMatch = true;
-        fieldValidation = true;
-      }
-    } else if (parameter.id === 'IPM-004') {
-      const policyNoMatch = text.match(/\b(POL|INS|CGL)[-A-Z0-9]{5,15}\b/i);
-      if (policyNoMatch) {
-        extractedFields['policy_number'] = policyNoMatch[0];
-        entityMatch = true;
-        fieldValidation = true;
-      }
-    } else if (parameter.id === 'ZTI-004') {
-      const certMatch = text.match(/\b(DRA|CERT|NBFET)[-A-Z0-9]{4,12}\b/i);
-      if (certMatch) {
-        extractedFields['certificate_number'] = certMatch[0];
-        entityMatch = true;
-        fieldValidation = true;
+    // If parameter has sub-controls/requirements and general validation didn't validate, check sub-controls
+    if (!valRes.validated && parameter.requirements && parameter.requirements.length > 0) {
+      for (const req of parameter.requirements) {
+        const subVal = EvidenceValidator.validateForSubControl(req.id, req.evidence_types, filename, text, policyVsImpl);
+        if (subVal.validated) {
+          valRes = {
+            ...valRes,
+            validated: true,
+            confidence: subVal.confidence,
+            fieldValidation: subVal.fieldValidation,
+            metadataMatch: valRes.metadataMatch || subVal.metadataMatch,
+            entityMatch: valRes.entityMatch || subVal.entityMatch,
+            semanticMatch: true,
+            detectedEvidenceType: subVal.detectedEvidenceType,
+            validationReason: subVal.validationReason,
+            missingMandatoryFields: subVal.missingMandatoryFields,
+            extractedFields: { ...valRes.extractedFields, ...subVal.extractedFields }
+          };
+          break;
+        }
       }
     }
 
-    if (personName) {
-      entityMatch = true;
-    }
+    const fieldValidation = valRes.fieldValidation;
+    const metadataMatch = valRes.metadataMatch;
+    const entityMatch = valRes.entityMatch;
+    const semanticMatch = valRes.semanticMatch;
+    const validated = isFilenameOnly ? false : valRes.validated;
+    const confidence = isFilenameOnly ? 0.40 : valRes.confidence;
 
-    const totalKw = parameter.keywords.length;
-    const keywordRatio = (matchedKeywordsInContent + matchedKeywordsInFilename) / totalKw;
-    semanticMatch = keywordRatio > 0.2;
-
-    // Calculate relevance score
-    let relevance = 0.4;
+    // 3. Stage 3: Control Satisfaction
+    let satisfiesControl = false;
     if (isFilenameOnly) {
-      relevance = 0.45; // Low relevance for filename-only candidates
+      satisfiesControl = parameter.allow_filename_only === true;
+    } else if (validated || parameter.allow_keyword_only === true) {
+      satisfiesControl = true;
     } else {
-      relevance = Math.min(0.99, Math.max(0.5, (matchedKeywordsInContent / totalKw) * 0.7 + (filenameMatch ? 0.15 : 0) + 0.2));
+      satisfiesControl = false;
     }
 
-    // Build snippet context showing match
+    // Calculate overall relevance score
+    const totalKw = parameter.keywords.length;
+    let relevance = 0.40;
+    if (isFilenameOnly) {
+      relevance = 0.45;
+    } else if (validated) {
+      relevance = Math.min(0.99, Math.max(0.70, (matchedKeywordsInContent / totalKw) * 0.4 + (filenameMatch ? 0.15 : 0) + 0.45));
+    } else {
+      relevance = Math.min(0.59, Math.max(0.35, (matchedKeywordsInContent / totalKw) * 0.5));
+    }
+
+    // Context snippet construction
     const matchedKw = parameter.keywords.find(kw => textLower.includes(kw.toLowerCase())) || parameter.keywords[0];
     const kwIdx = textLower.indexOf(matchedKw.toLowerCase());
     let snippet = isFilenameOnly
@@ -124,35 +151,69 @@ export class EvidenceMatcher {
       snippet = `...${text.substring(start, end).replace(/[\r\n]+/g, ' ')}...`;
     }
 
-    extractedFields['candidate'] = isCandidate;
-    extractedFields['satisfies_control'] = satisfiesControl;
-    extractedFields['is_filename_only'] = isFilenameOnly;
-    extractedFields['filename_match'] = filenameMatch;
-    extractedFields['content_match'] = contentMatch;
-    extractedFields['metadata_match'] = metadataMatch;
-    extractedFields['entity_match'] = entityMatch;
-    extractedFields['field_validation'] = fieldValidation;
-    extractedFields['semantic_match'] = semanticMatch;
-
-    return {
-      evidence_id: `EVID-${crypto.randomUUID().substring(0, 8)}`,
-      file_id: fileId,
-      filename,
-      path: filePath,
-      evidence_type: parameter.required_evidence[0] || 'GENERIC_EVIDENCE',
-      relevance: Number(relevance.toFixed(2)),
-      extracted_fields: extractedFields,
-      snippet,
-      created_at: new Date().toISOString(),
-      candidate: isCandidate,
-      satisfies_control: satisfiesControl,
+    const extractedFields: Record<string, any> = {
+      ...valRes.extractedFields,
+      raw_text: text,
+      matched_keywords_count: matchedKeywordsInContent + matchedKeywordsInFilename,
+      validation_reason: valRes.validationReason,
+      missing_mandatory_fields: valRes.missingMandatoryFields,
+      structure_warnings: extraction.warnings || [],
+      candidate,
+      filenameMatch,
+      contentMatch,
+      metadataMatch,
+      entityMatch,
+      fieldValidation,
+      semanticMatch,
+      isFilenameOnly,
+      isContentOnly,
+      validated,
+      satisfiesControl,
+      confidence,
+      // Snake_case aliases for backwards compatibility
       filename_match: filenameMatch,
       content_match: contentMatch,
       metadata_match: metadataMatch,
       entity_match: entityMatch,
       field_validation: fieldValidation,
       semantic_match: semanticMatch,
-      is_filename_only: isFilenameOnly
+      is_filename_only: isFilenameOnly,
+      is_content_only: isContentOnly,
+      satisfies_control: satisfiesControl
+    };
+
+    return {
+      evidence_id: `EVID-${crypto.randomUUID().substring(0, 8)}`,
+      file_id: fileId,
+      filename,
+      path: filePath,
+      evidence_type: valRes.detectedEvidenceType,
+      relevance: Number(relevance.toFixed(2)),
+      extracted_fields: extractedFields,
+      snippet,
+      created_at: new Date().toISOString(),
+      candidate,
+      filenameMatch,
+      contentMatch,
+      metadataMatch,
+      entityMatch,
+      fieldValidation,
+      semanticMatch,
+      isFilenameOnly,
+      isContentOnly,
+      validated,
+      satisfiesControl,
+      confidence,
+      // Snake_case aliases
+      filename_match: filenameMatch,
+      content_match: contentMatch,
+      metadata_match: metadataMatch,
+      entity_match: entityMatch,
+      field_validation: fieldValidation,
+      semantic_match: semanticMatch,
+      is_filename_only: isFilenameOnly,
+      is_content_only: isContentOnly,
+      satisfies_control: satisfiesControl
     };
   }
 
@@ -182,20 +243,5 @@ export class EvidenceMatcher {
       isImplementation: hasImpl,
       type
     };
-  }
-
-  /**
-   * Helper to extract person/employee names from text
-   */
-  private extractPersonName(text: string): string | undefined {
-    const nameMatch = text.match(/(?:Employee|Agent|Director|VP|Staff|Name|User):\s*([A-Z][a-z]+\s+[A-Z][a-z]+)/);
-    if (nameMatch) {
-      return nameMatch[1];
-    }
-    const genericNameMatch = text.match(/\b([A-Z][a-z]{2,15}\s+[A-Z][a-z]{2,15})\b/);
-    if (genericNameMatch) {
-      return genericNameMatch[1];
-    }
-    return undefined;
   }
 }

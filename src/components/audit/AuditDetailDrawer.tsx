@@ -131,6 +131,43 @@ export const AuditDetailDrawer: React.FC<AuditDetailDrawerProps> = ({
             )}
           </div>
 
+          {/* Sub-Control / Compound Requirement Breakdown */}
+          {parameterResult.sub_control_results && parameterResult.sub_control_results.length > 0 && (
+            <div className="mt-5 space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Sub-Control Validation Breakdown ({param.logic || 'AND'} Logic)
+                </h3>
+                <span className="text-[11px] font-semibold text-slate-500">
+                  {parameterResult.sub_control_results.filter((s: any) => s.status === 'PASS').length} of {parameterResult.sub_control_results.length} Satisfied
+                </span>
+              </div>
+              <div className="space-y-2">
+                {parameterResult.sub_control_results.map((sub: any, sidx: number) => (
+                  <div
+                    key={sidx}
+                    className="p-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl space-y-1.5 shadow-sm"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs text-slate-900 dark:text-slate-100">
+                        {sub.name}
+                      </span>
+                      {renderStatusBadge(sub.status)}
+                    </div>
+                    <p className="text-[11px] text-slate-600 dark:text-slate-400">
+                      {sub.reason || sub.description}
+                    </p>
+                    {sub.evidence && sub.evidence.length > 0 && (
+                      <div className="text-[10px] text-slate-500 font-mono">
+                        Evidence: {sub.evidence.map((e: any) => e.filename).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Auditor Override History Banner if Overridden */}
           {parameterResult.override && (
             <div className="mt-4 p-3 bg-cyan-50 dark:bg-cyan-950/40 border border-cyan-200 dark:border-cyan-800/60 rounded-xl text-xs space-y-1">

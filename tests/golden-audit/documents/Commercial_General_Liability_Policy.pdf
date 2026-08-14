@@ -1,0 +1,58 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 682 >>
+stream
+BT
+/F1 12 Tf
+50 750 Td
+(SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET) Tj
+0 -18 Td
+(COMMERCIAL GENERAL LIABILITY INSURANCE POLICY SCHEDULE) Tj
+0 -18 Td
+(Policy Number: CGL-GOLD-2026-99) Tj
+0 -18 Td
+(Insured Organization: Sentinel Recovery & Telecalling Services Pvt Ltd) Tj
+0 -18 Td
+(Insurance Provider: National General Assurance Corporation Ltd) Tj
+0 -18 Td
+(Period of Insurance: From 01/04/2026 To 31/03/2027) Tj
+0 -18 Td
+(Effective Date: 2026-04-01) Tj
+0 -18 Td
+(Expiry Date: 2027-03-31) Tj
+0 -18 Td
+(Coverage Amount / Limit of Liability: INR 50,000,000 Any One Occurrence) Tj
+0 -18 Td
+(Business Description: Telecalling, Debt Collection and Customer Support Services) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Title (CGL Insurance Policy) /Author (Sentinel Automated System) /CreationDate (D:20260814000000Z) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000974 00000 n 
+0000001044 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R /Info 6 0 R >>
+startxref
+1165
+%%EOF

@@ -1,0 +1,369 @@
+{
+  "version": "1.0.0",
+  "name": "FileSentinel Golden Multi-Format End-to-End Audit Dataset",
+  "description": "Deterministic validation dataset containing real synthetic documents in PDF, DOCX, XLSX, PPTX, CSV, and TXT formats for comprehensive production audit verification.",
+  "generated_at": "2026-08-14T00:00:00.000Z",
+  "audit_date": "2026-08-14",
+  "agency_name": "Sentinel Recovery & Telecalling Services Pvt Ltd",
+  "entities": {
+    "primary": {
+      "name": "John Synthetic",
+      "agent_id": "AG-GOLD-001",
+      "employee_id": "EMP-GOLD-001"
+    },
+    "secondary": {
+      "name": "Jane Synthetic",
+      "agent_id": "AG-GOLD-002",
+      "employee_id": "EMP-GOLD-002"
+    },
+    "conflict_case": {
+      "description": "Conflicting document linking Jane Synthetic with John's Agent ID AG-GOLD-001",
+      "file": "Conflicting_Police_Verification_Jane_Synthetic.txt",
+      "expected_outcome": "ENTITY CONFLICT / REVIEW"
+    }
+  },
+  "format_counts": {
+    "pdf": 5,
+    "docx": 8,
+    "xlsx": 5,
+    "pptx": 2,
+    "csv": 6,
+    "txt": 11
+  },
+  "total_documents": 37,
+  "documents": [
+    {
+      "filename": "GST_Registration_Certificate.pdf",
+      "format": "PDF",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-001",
+      "purpose": "Valid GST Registration Certificate (GSTIN 27SYNTHETIC0000Z0) and Agency Identification",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Commercial_General_Liability_Policy.pdf",
+      "format": "PDF",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-004",
+      "purpose": "Active CGL Insurance policy with valid policy number, coverage limit, and unexpired date range",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "DRA_Certificate_John_Synthetic.pdf",
+      "format": "PDF",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-004",
+      "purpose": "DRA Passed certificate for John Synthetic with unexpired validity until 2029",
+      "expected_validation": "PASS",
+      "entity": "John Synthetic (AG-GOLD-001 / EMP-GOLD-001)"
+    },
+    {
+      "filename": "GST_Policy_Spoofed_Filename.pdf",
+      "format": "PDF",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-001",
+      "purpose": "Filename spoofing test: Candidate matches filename keywords but body contains generic tax policy without GSTIN",
+      "expected_validation": "REVIEW",
+      "entity": "N/A"
+    },
+    {
+      "filename": "Expired_Insurance_Policy_Sample.pdf",
+      "format": "PDF",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-004",
+      "purpose": "Historical expired insurance policy to verify safe date comparison",
+      "expected_validation": "FAIL",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Business_Continuity_Plan_2026.docx",
+      "format": "DOCX",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-010",
+      "purpose": "Approved BCP and disaster recovery plan document",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "HR_and_Anti_Sexual_Harassment_POSH_Policy.docx",
+      "format": "DOCX",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-002",
+      "purpose": "HR Policy & Prevention of Sexual Harassment (POSH) Policy with ICC committee",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Endpoint_USB_Security_Policy.docx",
+      "format": "DOCX",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-008",
+      "purpose": "Endpoint security policy mandating USB and removable storage restrictions (Policy component of compound rule)",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Web_Filtering_Social_Media_Policy.docx",
+      "format": "DOCX",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-009",
+      "purpose": "Acceptable use and web filtering policy mandating social media blacklisting (Policy component of compound rule)",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Commercial_Lease_Agreement_Premises.docx",
+      "format": "DOCX",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-003",
+      "purpose": "Commercial Lease Agreement for office premises (Lease component of compound rule)",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Agent_Onboarding_KYC_Verification.docx",
+      "format": "DOCX",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-007",
+      "purpose": "Authenticated KYC and onboarding dossier for John Synthetic and Jane Synthetic",
+      "expected_validation": "PASS",
+      "entity": "John Synthetic / Jane Synthetic"
+    },
+    {
+      "filename": "Snipping_Tool_Restriction_Policy.docx",
+      "format": "DOCX",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-006",
+      "purpose": "Policy document only without technical implementation export (Distinguish policy test)",
+      "expected_validation": "REVIEW",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "ID_Deactivation_Offboarding_Policy.docx",
+      "format": "DOCX",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-002",
+      "purpose": "Termination procedure SOP (Policy document only -> REVIEW)",
+      "expected_validation": "REVIEW",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Refresher_Training_Attendance_2026.xlsx",
+      "format": "XLSX",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-004",
+      "purpose": "Structured workbook containing participant attendance log for refresher training",
+      "expected_validation": "PASS",
+      "entity": "John Synthetic / Jane Synthetic"
+    },
+    {
+      "filename": "CCTV_Installation_and_Camera_Inventory.xlsx",
+      "format": "XLSX",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-006",
+      "purpose": "Active camera inventory and DVR/NVR configuration workbook (Installation component of CCTV rule)",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Windows_OS_Patch_Compliance_Report.xlsx",
+      "format": "XLSX",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-008",
+      "purpose": "Endpoint patch compliance log showing Windows 11 23H2 builds",
+      "expected_validation": "PASS",
+      "entity": "Workstations assigned to John Synthetic / Jane Synthetic"
+    },
+    {
+      "filename": "Active_Directory_Password_Policy_Export.xlsx",
+      "format": "XLSX",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-007",
+      "purpose": "Active Directory GPO export proving password complexity and expiration enforcement",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Target_vs_Actual_Performance_Evaluation.xlsx",
+      "format": "XLSX",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-005",
+      "purpose": "Performance evaluation matrix and No Dues Certificate declaration",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Fire_Safety_Evacuation_Drill_Report_2026.pptx",
+      "format": "PPTX",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-008",
+      "purpose": "Presentation report of fire drill conducted on 2026-06-01 (recency < 365 days relative to 2026-08-14)",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Clean_Desk_Policy_and_Audit_Briefing.pptx",
+      "format": "PPTX",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-010",
+      "purpose": "Clean desk policy presentation requiring human auditor verification",
+      "expected_validation": "REVIEW",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Endpoint_Antivirus_EDR_Console_Export.csv",
+      "format": "CSV",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-009",
+      "purpose": "Antivirus EDR console dump with updated virus definitions (Antivirus sub-control)",
+      "expected_validation": "PASS",
+      "entity": "Floor Workstations"
+    },
+    {
+      "filename": "DLP_GPO_Removable_Storage_Export.csv",
+      "format": "CSV",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-008",
+      "purpose": "Technical implementation GPO export showing USB storage disabled (Implementation sub-control)",
+      "expected_validation": "PASS",
+      "entity": "Domain Controller GPO"
+    },
+    {
+      "filename": "Firewall_Proxy_Blacklist_Rules_Export.csv",
+      "format": "CSV",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-009",
+      "purpose": "Technical firewall/proxy export showing blacklisted social sites and webmail (Implementation sub-control)",
+      "expected_validation": "PASS",
+      "entity": "Firewall Proxy"
+    },
+    {
+      "filename": "CCTV_90_Days_Storage_Retention_Config.csv",
+      "format": "CSV",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-006",
+      "purpose": "Storage retention config export guaranteeing 90 days retention (Retention sub-control)",
+      "expected_validation": "PASS",
+      "entity": "NVR Core Unit"
+    },
+    {
+      "filename": "Power_and_Internet_Backup_Maintenance_Log.csv",
+      "format": "CSV",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-009",
+      "purpose": "Maintenance logs for UPS, DG set, and secondary ISP failover (Power & Internet sub-controls)",
+      "expected_validation": "PASS",
+      "entity": "Facility & Telecom"
+    },
+    {
+      "filename": "Visitor_Entry_Register_2026.csv",
+      "format": "CSV",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-005",
+      "purpose": "Structured visitor entry register with timestamps and badge records",
+      "expected_validation": "PASS",
+      "entity": "Reception Log"
+    },
+    {
+      "filename": "Escalation_Matrix_Hierarchy.txt",
+      "format": "TXT",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-011",
+      "purpose": "4-Level structured escalation matrix with contact details and SLAs",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Police_Verification_Certificate_John_Synthetic.txt",
+      "format": "TXT",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-005",
+      "purpose": "Valid Police Clearance Certificate for John Synthetic",
+      "expected_validation": "PASS",
+      "entity": "John Synthetic (AG-GOLD-001 / EMP-GOLD-001)"
+    },
+    {
+      "filename": "Police_Verification_Receipt_Jane_Synthetic.txt",
+      "format": "TXT",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-005",
+      "purpose": "Proof of Police Verification application acknowledgement for Jane Synthetic",
+      "expected_validation": "PASS",
+      "entity": "Jane Synthetic (AG-GOLD-002 / EMP-GOLD-002)"
+    },
+    {
+      "filename": "Agency_ID_Card_Issue_Register.txt",
+      "format": "TXT",
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "parameter_id": "GCI-001",
+      "purpose": "Agency ID and Field Endorsement card issue register for agents",
+      "expected_validation": "PASS",
+      "entity": "John Synthetic / Jane Synthetic"
+    },
+    {
+      "filename": "Shops_and_Establishment_Certificate.txt",
+      "format": "TXT",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-003",
+      "purpose": "Form C Shops & Establishment registration certificate (Shops Act sub-control)",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Principal_Employer_CLRA_Registration.txt",
+      "format": "TXT",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-001",
+      "purpose": "Form I Principal Employer Registration Certificate under CLRA",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Recovery & Telecalling Services Pvt Ltd"
+    },
+    {
+      "filename": "Fire_Extinguisher_Inspection_Log.txt",
+      "format": "TXT",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-007",
+      "purpose": "Fire safety equipment inspection log confirming availability, functional status, and unexpired refill date",
+      "expected_validation": "PASS",
+      "entity": "Facility Safety"
+    },
+    {
+      "filename": "Generic_PF_ESIC_Policy_Keyword_Only.txt",
+      "format": "TXT",
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "parameter_id": "IPM-001",
+      "purpose": "Generic keyword-only match without registration numbers (Negative validation case)",
+      "expected_validation": "REVIEW",
+      "entity": "N/A"
+    },
+    {
+      "filename": "Biometric_Access_Control_Config.txt",
+      "format": "TXT",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-002",
+      "purpose": "Biometric access log and door access controller implementation details",
+      "expected_validation": "PASS",
+      "entity": "Sentinel Access System"
+    },
+    {
+      "filename": "Phone_Lending_Dedicated_Workspace.txt",
+      "format": "TXT",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-003",
+      "purpose": "Segregated Bay 4 dedicated workspace documentation for phone lending business",
+      "expected_validation": "PASS",
+      "entity": "Floor Allocation"
+    },
+    {
+      "filename": "Conflicting_Police_Verification_Jane_Synthetic.txt",
+      "format": "TXT",
+      "category": "ZERO_TOLERANCE",
+      "parameter_id": "ZTI-005",
+      "purpose": "Intentional entity conflict scenario: Associates Jane Synthetic with John's Agent ID AG-GOLD-001",
+      "expected_validation": "REVIEW",
+      "entity": "Jane Synthetic (AG-GOLD-001 - Conflict)"
+    }
+  ]
+}

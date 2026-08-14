@@ -18,7 +18,12 @@ import {
   Calendar,
   AlertOctagon,
   ChevronRight,
-  Sparkles
+  Sparkles,
+  Users,
+  UserCheck,
+  Fingerprint,
+  Link,
+  UserX
 } from 'lucide-react';
 import { api } from '../../services/api';
 import { AuditDetailDrawer } from './AuditDetailDrawer';
@@ -35,7 +40,7 @@ export const AuditComplianceView: React.FC = () => {
   const [targetDir, setTargetDir] = useState<string>('./sample-files/audit');
 
   // Filters & Tabs
-  const [activeTab, setActiveTab] = useState<'checklist' | 'categories' | 'gaps' | 'history'>('checklist');
+  const [activeTab, setActiveTab] = useState<'checklist' | 'categories' | 'gaps' | 'entities' | 'history'>('checklist');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -350,6 +355,23 @@ export const AuditComplianceView: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setActiveTab('entities')}
+            className={`pb-3 text-xs font-bold transition-colors border-b-2 inline-flex items-center gap-1.5 ${
+              activeTab === 'entities'
+                ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+            }`}
+          >
+            <Users className="w-3.5 h-3.5" />
+            Entities & Correlation ({activeSession?.entities?.length || 0})
+            {activeSession?.entity_conflicts?.length > 0 && (
+              <span className="px-1.5 py-0.2 bg-rose-500 text-white rounded-full text-[10px] font-extrabold animate-pulse">
+                {activeSession.entity_conflicts.length}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setActiveTab('history')}
             className={`pb-3 text-xs font-bold transition-colors border-b-2 ${
               activeTab === 'history'
@@ -568,7 +590,180 @@ export const AuditComplianceView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 4: PAST AUDITS HISTORY */}
+      {/* TAB 4: ENTITIES & CROSS-PARAMETER CORRELATION */}
+      {activeTab === 'entities' && (
+        <div className="space-y-6">
+          <div className="p-4 bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800 rounded-xl text-xs text-indigo-900 dark:text-indigo-200 flex items-start gap-3">
+            <Fingerprint className="w-5 h-5 text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5" />
+            <div>
+              <strong className="font-bold">Audit-Session-Level Entity Resolution:</strong>
+              <p className="mt-1 text-slate-700 dark:text-slate-300">
+                Correlates individuals, field agents, certificates, and agency credentials across the entire audit session (e.g. DRA Certificates, Police Verification slips, and Agency ID badges). Automatically matches name variants and strong identifiers (Agent ID, Employee ID, Cert #), clustering evidence items into unified identity entities while flagging identity mismatches.
+              </p>
+            </div>
+          </div>
+
+          {/* Conflicts Alert if any */}
+          {activeSession?.entity_conflicts && activeSession.entity_conflicts.length > 0 && (
+            <div className="p-4 bg-rose-50 dark:bg-rose-950/50 border border-rose-300 dark:border-rose-800 rounded-xl space-y-3">
+              <div className="flex items-center gap-2 text-rose-800 dark:text-rose-300 font-bold text-xs">
+                <AlertOctagon className="w-4 h-4 text-rose-600 dark:text-rose-400" />
+                <span>POSSIBLE ENTITY MISMATCH CONFLICTS DETECTED ({activeSession.entity_conflicts.length})</span>
+              </div>
+              <div className="space-y-2">
+                {activeSession.entity_conflicts.map((conflict: any, cidx: number) => (
+                  <div key={cidx} className="p-3 bg-white dark:bg-slate-900 border border-rose-200 dark:border-rose-900 rounded-lg text-xs space-y-1.5 shadow-sm">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-rose-700 dark:text-rose-400">
+                        {conflict.conflict_type.replace(/_/g, ' ')}
+                      </span>
+                      <span className={`px-2 py-0.5 text-[10px] font-extrabold uppercase rounded ${
+                        conflict.severity === 'FATAL' || conflict.severity === 'HIGH'
+                          ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                          : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                      }`}>
+                        {conflict.severity} SEVERITY
+                      </span>
+                    </div>
+                    <p className="text-slate-700 dark:text-slate-300">{conflict.description}</p>
+                    <div className="text-[11px] text-slate-500 font-mono">
+                      Impacted Parameters: {conflict.involved_parameter_ids?.join(', ')}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Resolved Entities List */}
+          <div className="space-y-4">
+            <h4 className="text-xs font-extrabold uppercase tracking-wider text-slate-400">
+              Resolved Individuals & Agent Entities ({activeSession?.entities?.length || 0})
+            </h4>
+
+            {(!activeSession?.entities || activeSession.entities.length === 0) ? (
+              <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-400 text-xs">
+                No distinct person or agent entities extracted from validated evidence in this session.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4">
+                {activeSession.entities.map((entity: any) => (
+                  <div
+                    key={entity.entity_id}
+                    className="p-5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm space-y-4"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800/80 pb-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950 border border-indigo-200 dark:border-indigo-800 flex items-center justify-center text-indigo-600 dark:text-indigo-400 font-black text-sm">
+                          <UserCheck className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                              {entity.name}
+                            </h3>
+                            <span className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 font-mono text-[10px] text-slate-500 rounded">
+                              Normalized: {entity.normalized_name}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-400 font-mono">Entity ID: {entity.entity_id}</p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {entity.status === 'CONSISTENT' ? (
+                          <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 dark:bg-emerald-950/80 dark:text-emerald-300 font-bold text-xs rounded-full border border-emerald-300 dark:border-emerald-800 inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> CONSISTENT IDENTITY
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-1 bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 font-bold text-xs rounded-full border border-amber-300 dark:border-amber-800 inline-flex items-center gap-1">
+                            <AlertTriangle className="w-3.5 h-3.5" /> {entity.status}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Identifiers Badges */}
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {entity.agent_id && (
+                        <div className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-700">
+                          <span className="text-slate-400 font-medium">Agent ID:</span> <strong className="font-bold">{entity.agent_id}</strong>
+                        </div>
+                      )}
+                      {entity.employee_id && (
+                        <div className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-700">
+                          <span className="text-slate-400 font-medium">Employee ID:</span> <strong className="font-bold">{entity.employee_id}</strong>
+                        </div>
+                      )}
+                      {entity.certificate_number && (
+                        <div className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-700">
+                          <span className="text-slate-400 font-medium">Certificate / Ack #:</span> <strong className="font-bold">{entity.certificate_number}</strong>
+                        </div>
+                      )}
+                      {entity.email && (
+                        <div className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-700">
+                          <span className="text-slate-400 font-medium">Email:</span> <strong className="font-bold">{entity.email}</strong>
+                        </div>
+                      )}
+                      {entity.phone && (
+                        <div className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200 rounded-lg border border-slate-200 dark:border-slate-700">
+                          <span className="text-slate-400 font-medium">Phone:</span> <strong className="font-bold">{entity.phone}</strong>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Matching Signals */}
+                    {entity.matching_signals && entity.matching_signals.length > 0 && (
+                      <div className="text-xs text-slate-600 dark:text-slate-400 space-y-1">
+                        <span className="font-semibold text-slate-500">Correlation Signals:</span>
+                        <div className="flex flex-wrap gap-1.5 mt-0.5">
+                          {entity.matching_signals.map((sig: string, sidx: number) => (
+                            <span key={sidx} className="px-2 py-0.5 bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 rounded text-[11px] font-medium border border-indigo-100 dark:border-indigo-900">
+                              🔗 {sig}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Linked Evidence Files */}
+                    <div className="space-y-1.5 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+                      <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                        Linked Cross-Parameter Evidence ({entity.linked_evidence?.length || 0}):
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-1">
+                        {(entity.linked_evidence || []).map((ev: any, eidx: number) => (
+                          <div
+                            key={eidx}
+                            className="p-2.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-200 dark:border-slate-700/80 text-xs space-y-1"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400">
+                                {ev.parameter_id || ev.parameterId}
+                              </span>
+                              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold">
+                                {Math.round((ev.confidence || 0.9) * 100)}% Conf
+                              </span>
+                            </div>
+                            <div className="font-medium text-slate-800 dark:text-slate-200 truncate" title={ev.parameter_title || ev.parameterTitle}>
+                              {ev.parameter_title || ev.parameterTitle}
+                            </div>
+                            <div className="font-mono text-[11px] text-slate-500 truncate" title={ev.filename}>
+                              📄 {ev.filename}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* TAB 5: PAST AUDITS HISTORY */}
       {activeTab === 'history' && (
         <div className="border border-slate-200 dark:border-slate-800 rounded-2xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
           <table className="w-full text-left text-xs">

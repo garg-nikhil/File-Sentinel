@@ -1,0 +1,60 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 657 >>
+stream
+BT
+/F1 12 Tf
+50 750 Td
+(SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET) Tj
+0 -18 Td
+(FORM GST REG-06 - GOVERNMENT OF INDIA) Tj
+0 -18 Td
+(REGISTRATION CERTIFICATE) Tj
+0 -18 Td
+(GSTIN: 27SYNTHETIC0000Z0) Tj
+0 -18 Td
+(Legal Name: Sentinel Recovery & Telecalling Services Pvt Ltd) Tj
+0 -18 Td
+(Trade Name: Sentinel Collections) Tj
+0 -18 Td
+(Principal Place of Business: Unit 401, Tech Park Alpha, Mumbai, MH) Tj
+0 -18 Td
+(Date of Liability: 01/04/2024) Tj
+0 -18 Td
+(Date of Validity: From 15/01/2024 To Permanent) Tj
+0 -18 Td
+(Type of Registration: Regular) Tj
+0 -18 Td
+(Agency Identification Board: Board of Directors - John Synthetic, Jane Synthetic) Tj
+ET
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+6 0 obj
+<< /Title (GST Registration Certificate) /Author (Sentinel Automated System) /CreationDate (D:20260814000000Z) >>
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000949 00000 n 
+0000001019 00000 n 
+trailer
+<< /Size 7 /Root 1 0 R /Info 6 0 R >>
+startxref
+1148
+%%EOF

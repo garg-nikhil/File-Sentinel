@@ -1,5 +1,6 @@
 import { AuditParameter, AuditParameterResult, EvidenceItem, PolicyImplementationStatus, PoliceVerificationStatus } from './models.js';
 import { DateEvaluator } from './dateEvaluator.js';
+import { CompoundEvaluator } from './compoundEvaluator.js';
 
 export class AuditEvaluator {
   /**
@@ -10,6 +11,21 @@ export class AuditEvaluator {
     evidenceItems: EvidenceItem[],
     auditDate: string = new Date().toISOString().split('T')[0]
   ): AuditParameterResult {
+    // COMPOUND / SUB-CONTROL EVALUATION DELEGATION
+    const isCompound = Boolean(
+      (parameter.requirements && parameter.requirements.length > 0) ||
+      (parameter.sub_controls && parameter.sub_controls.length > 0)
+    );
+
+    if (isCompound) {
+      return CompoundEvaluator.evaluateCompoundParameter(
+        parameter,
+        evidenceItems,
+        auditDate,
+        p => this.calculateParameterMaxScore(p)
+      );
+    }
+
     const missingRequirements: string[] = [];
     const warnings: string[] = [];
 
@@ -30,8 +46,8 @@ export class AuditEvaluator {
       };
     }
 
-    // 2. FILENAME SPOOFING PROTECTION (FINDING-01)
-    // A filename-only match must NEVER satisfy an audit control unless explicitly permitted
+    // 2. FILENAME SPOOFING & UNVALIDATED KEYWORD PROTECTION (FINDING-01 & REMEDIATION-01)
+    // A filename-only match or unvalidated keyword match must NEVER automatically satisfy an audit control unless explicitly permitted
     const isFilenameOnlyMatch = evidenceItems.every(e => e.is_filename_only || e.extracted_fields?.is_filename_only);
     if (isFilenameOnlyMatch && !parameter.allow_filename_only) {
       return {
@@ -46,6 +62,24 @@ export class AuditEvaluator {
         reason: `Candidate evidence discovered based on filename ('${evidenceItems[0].filename}'), but document body content did not match parameter requirements or pass content validation. Filename-only matches cannot satisfy audit controls without validated body content.`,
         missing_requirements: ['Validated document body content'],
         warnings: ['Filename-only match detected (potential filename spoofing)', ...warnings]
+      };
+    }
+
+    // Unvalidated evidence (e.g. content-keyword match that failed required structured validation)
+    const hasUnvalidatedOnly = evidenceItems.every(e => e.validated === false && !parameter.allow_keyword_only);
+    if (hasUnvalidatedOnly) {
+      return {
+        parameter_id: parameter.id,
+        parameter,
+        status: 'REVIEW',
+        confidence: 0.88,
+        fatal: parameter.fatal,
+        score_earned: 0,
+        max_score: this.calculateParameterMaxScore(parameter),
+        evidence: evidenceItems,
+        reason: `Candidate evidence matched keywords, but failed domain evidence validation rules. Generic keyword matches cannot satisfy audit controls without required structured fields.`,
+        missing_requirements: ['Structured validation of required fields'],
+        warnings: ['Evidence failed structured content validation', ...warnings]
       };
     }
 
@@ -105,7 +139,69 @@ export class AuditEvaluator {
       }
     }
 
-    // 6. EXPIRY & TIME-BOUND CONTROLS EVALUATION (FINDING-02)
+    // 6. PARAMETER SPECIFIC EVALUATION RULES
+    // ZTI-005 Police Verification (handles both valid verified report and proof of application)
+    if (parameter.id === 'ZTI-005') {
+      return this.evaluatePoliceVerification(parameter, evidenceItems, auditDate, warnings);
+    }
+
+    // IPM-008 Fire Drill (Recency check: conducted within the latest 1 year relative to audit date)
+    if (parameter.id === 'IPM-008' || parameter.validity_type === 'RECENCY') {
+      const drillDate = evidenceItems[0]?.extracted_fields?.drill_date ||
+        evidenceItems[0]?.extracted_fields?.issue_date ||
+        evidenceItems[0]?.extracted_fields?.effective_date ||
+        evidenceItems[0]?.extracted_fields?.all_dates?.[0];
+
+      const maxDays = parameter.max_age_days || 365;
+
+      if (drillDate) {
+        if (DateEvaluator.isOlderThanDays(drillDate, auditDate, maxDays)) {
+          return {
+            parameter_id: parameter.id,
+            parameter,
+            status: 'FAIL',
+            confidence: 0.98,
+            fatal: parameter.fatal,
+            score_earned: 0,
+            max_score: this.calculateParameterMaxScore(parameter),
+            evidence: evidenceItems,
+            reason: `Latest fire drill date (${drillDate}) is older than 1 year relative to audit date (${auditDate}).`,
+            missing_requirements: ['Fire drill conducted within the last 12 months'],
+            warnings: ['Fire drill date expired', ...warnings]
+          };
+        } else {
+          return {
+            parameter_id: parameter.id,
+            parameter,
+            status: 'PASS',
+            confidence: 0.95,
+            fatal: parameter.fatal,
+            score_earned: this.calculateParameterMaxScore(parameter),
+            max_score: this.calculateParameterMaxScore(parameter),
+            evidence: evidenceItems,
+            reason: `Fire drill conducted on ${drillDate} verified within the required 1-year period relative to audit date (${auditDate}).`,
+            missing_requirements: [],
+            warnings
+          };
+        }
+      } else {
+        return {
+          parameter_id: parameter.id,
+          parameter,
+          status: 'REVIEW',
+          confidence: 0.85,
+          fatal: parameter.fatal,
+          score_earned: 0,
+          max_score: this.calculateParameterMaxScore(parameter),
+          evidence: evidenceItems,
+          reason: `Fire drill report present but drill date could not be verified. Auditor review required to confirm drill was conducted within the past year.`,
+          missing_requirements: ['Explicit drill date on report'],
+          warnings: ['Drill date missing from evidence', ...warnings]
+        };
+      }
+    }
+
+    // 7. EXPIRY & TIME-BOUND CONTROLS EVALUATION
     if (parameter.requires_validity_check || parameter.expiry_required) {
       const expiryDates = evidenceItems
         .map(e => e.extracted_fields?.expiry_date)
@@ -145,53 +241,6 @@ export class AuditEvaluator {
       }
     }
 
-    // 7. PARAMETER SPECIFIC EVALUATION RULES
-
-    // ZTI-005 Police Verification
-    if (parameter.id === 'ZTI-005') {
-      return this.evaluatePoliceVerification(parameter, evidenceItems, auditDate, warnings);
-    }
-
-    // IPM-008 Fire Drill (Older than 1 year)
-    if (parameter.id === 'IPM-008') {
-      const drillDate = evidenceItems[0]?.extracted_fields?.issue_date;
-      if (drillDate && DateEvaluator.isOlderThanYears(drillDate, auditDate, 1)) {
-        return {
-          parameter_id: parameter.id,
-          parameter,
-          status: 'FAIL',
-          confidence: 0.95,
-          fatal: parameter.fatal,
-          score_earned: 0,
-          max_score: this.calculateParameterMaxScore(parameter),
-          evidence: evidenceItems,
-          reason: `Latest fire drill date (${drillDate}) is older than 1 year relative to audit date (${auditDate}).`,
-          missing_requirements: ['Fire drill conducted within the last 12 months'],
-          warnings: ['Fire drill date expired', ...warnings]
-        };
-      }
-    }
-
-    // IPM-004 Insurance Expiry
-    if (parameter.id === 'IPM-004') {
-      const expiryDate = evidenceItems[0]?.extracted_fields?.expiry_date;
-      if (expiryDate && DateEvaluator.isExpired(expiryDate, auditDate)) {
-        return {
-          parameter_id: parameter.id,
-          parameter,
-          status: 'FAIL',
-          confidence: 0.98,
-          fatal: parameter.fatal,
-          score_earned: 0,
-          max_score: this.calculateParameterMaxScore(parameter),
-          evidence: evidenceItems,
-          reason: `Commercial General Liability insurance policy expired on ${expiryDate} (Audit Date: ${auditDate}).`,
-          missing_requirements: ['Valid active insurance policy'],
-          warnings: ['Insurance policy expired', ...warnings]
-        };
-      }
-    }
-
     // COMPOUND / SUB-CONTROL EVALUATION
     if (parameter.logic === 'AND' && parameter.sub_controls) {
       return this.evaluateAndSubControls(parameter, evidenceItems, warnings);
@@ -227,16 +276,23 @@ export class AuditEvaluator {
     auditDate: string,
     warnings: string[]
   ): AuditParameterResult {
-    const combinedText = evidenceItems.map(e => `${e.filename} ${e.snippet}`).join(' ').toLowerCase();
+    const combinedText = evidenceItems.map(e => `${e.filename} ${e.extracted_fields?.raw_text || e.snippet}`).join(' ').toLowerCase();
 
     let pvStatus: PoliceVerificationStatus = 'UNCLEAR';
     let status: 'PASS' | 'FAIL' | 'REVIEW' = 'REVIEW';
     let reason = '';
 
     if (combinedText.includes('verified') || combinedText.includes('police clearance certificate') || combinedText.includes('clearance report')) {
-      pvStatus = 'VERIFIED';
-      status = 'PASS';
-      reason = 'Valid police verification certificate verified.';
+      const explicitExpiry = evidenceItems[0]?.extracted_fields?.expiry_date;
+      if (explicitExpiry && DateEvaluator.isExpired(explicitExpiry, auditDate)) {
+        pvStatus = 'EXPIRED';
+        status = 'FAIL';
+        reason = `Police verification report expired on ${explicitExpiry} (Audit Date: ${auditDate}).`;
+      } else {
+        pvStatus = 'VERIFIED';
+        status = 'PASS';
+        reason = 'Valid police verification certificate verified.';
+      }
     } else if (combinedText.includes('applied') || combinedText.includes('acknowledgement') || combinedText.includes('receipt')) {
       pvStatus = 'APPLIED';
       status = 'PASS';
@@ -282,7 +338,7 @@ export class AuditEvaluator {
   ): AuditParameterResult {
     const maxScore = this.calculateParameterMaxScore(parameter);
     const subStatuses: Record<string, 'PASS' | 'FAIL' | 'REVIEW'> = {};
-    const combined = evidenceItems.map(e => `${e.filename} ${e.snippet}`).join(' ').toLowerCase();
+    const combined = evidenceItems.map(e => `${e.filename} ${e.extracted_fields?.raw_text || e.snippet}`).join(' ').toLowerCase();
 
     const missingSubs: string[] = [];
 
@@ -327,7 +383,7 @@ export class AuditEvaluator {
   ): AuditParameterResult {
     const maxScore = this.calculateParameterMaxScore(parameter);
     const subStatuses: Record<string, 'PASS' | 'FAIL' | 'REVIEW'> = {};
-    const combined = evidenceItems.map(e => `${e.filename} ${e.snippet}`).join(' ').toLowerCase();
+    const combined = evidenceItems.map(e => `${e.filename} ${e.extracted_fields?.raw_text || e.snippet}`).join(' ').toLowerCase();
 
     let passedCount = 0;
     const missingSubs: string[] = [];

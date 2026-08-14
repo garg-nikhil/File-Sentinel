@@ -1,0 +1,24 @@
+SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET
+CUSTOMER GRIEVANCE & OPERATIONAL ESCALATION MATRIX
+Organization: Sentinel Recovery & Telecalling Services Pvt Ltd
+Active Period: 2026 Operations
+
+LEVEL 1 - TEAM LEAD / FLOOR SUPERVISOR
+Contact Role: Floor Support Lead
+Email: escalation-l1@sentinel-recovery.synthetic
+Response SLA: Within 4 Hours
+
+LEVEL 2 - OPERATIONS MANAGER
+Contact Role: Operations Manager
+Email: escalation-l2@sentinel-recovery.synthetic
+Response SLA: Within 8 Hours
+
+LEVEL 3 - HEAD OF COMPLIANCE & LEGAL
+Contact Role: Chief Compliance Officer
+Email: compliance-head@sentinel-recovery.synthetic
+Response SLA: Within 24 Hours
+
+LEVEL 4 - PRINCIPAL NODAL OFFICER / EXECUTIVE COMMITTEE
+Contact Role: Principal Nodal Officer
+Email: nodalofficer@sentinel-recovery.synthetic
+Response SLA: Within 48 Hours

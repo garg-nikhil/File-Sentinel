@@ -37,7 +37,7 @@ export class AuditScoringEngine {
       } else if (effectiveStatus === 'REVIEW') reviewCount++;
       else if (effectiveStatus === 'EVIDENCE_NOT_FOUND') {
         notFoundCount++;
-        if (res.fatal) fatalFailuresCount++; // Missing evidence for a fatal parameter is a fatal failure
+        if (res.fatal && !res.parameter.requires_human_review) fatalFailuresCount++; // Missing evidence for a fatal parameter is a fatal failure unless marked for on-site human review
       }
 
       const categoryKey = res.parameter.category;

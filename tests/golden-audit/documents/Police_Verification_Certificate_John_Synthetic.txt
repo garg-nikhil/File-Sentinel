@@ -1,0 +1,13 @@
+SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET
+GOVERNMENT POLICE DEPARTMENT - CHARACTER & BACKGROUND CLEARANCE CERTIFICATE
+Verification Report No: PCC-GOLD-2026-101
+This is to certify that Police Verification has been conducted for:
+Employee / Agent Name: John Synthetic
+Agent ID: AG-GOLD-001
+Employee ID: EMP-GOLD-001
+Address: Flat 204, Green Heights, Mumbai, Maharashtra
+Status: VERIFIED / POLICE CLEARANCE CERTIFICATE ISSUED
+Result: NO ADVERSE OR CRIMINAL RECORD FOUND
+Issue Date: 2026-05-20
+Expiry Date: 2027-05-20
+Authorized Signatory: Deputy Commissioner of Police

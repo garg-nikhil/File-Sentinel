@@ -1,0 +1,241 @@
+{
+  "audit_date": "2026-08-14",
+  "agency_name": "Sentinel Recovery & Telecalling Services Pvt Ltd",
+  "auditor_name": "Automated Golden Audit Test Suite",
+  "expected_overall_status": "NEEDS_REVIEW",
+  "expected_entity_resolution": {
+    "total_entities": 2,
+    "has_conflicts": true,
+    "primary_entities": [
+      {
+        "name": "John Synthetic",
+        "agent_id": "AG-GOLD-001",
+        "employee_id": "EMP-GOLD-001"
+      },
+      {
+        "name": "Jane Synthetic",
+        "agent_id": "AG-GOLD-002",
+        "employee_id": "EMP-GOLD-002"
+      }
+    ],
+    "conflicts": [
+      {
+        "conflict_type": "MULTIPLE_NAMES_FOR_IDENTIFIER",
+        "conflicting_identifier": "AG-GOLD-001",
+        "severity": "CRITICAL"
+      }
+    ]
+  },
+  "parameter_expectations": {
+    "ZTI-001": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.90,
+      "category": "ZERO_TOLERANCE",
+      "expected_evidence_files": ["GST_Registration_Certificate.pdf"]
+    },
+    "ZTI-002": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.90,
+      "category": "ZERO_TOLERANCE",
+      "expected_evidence_files": ["Biometric_Access_Control_Config.txt"]
+    },
+    "ZTI-003": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.90,
+      "category": "ZERO_TOLERANCE",
+      "expected_evidence_files": ["Phone_Lending_Dedicated_Workspace.txt"]
+    },
+    "ZTI-004": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.90,
+      "category": "ZERO_TOLERANCE",
+      "expected_evidence_files": ["DRA_Certificate_John_Synthetic.pdf"]
+    },
+    "ZTI-005": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.90,
+      "category": "ZERO_TOLERANCE",
+      "pv_status": "VERIFIED"
+    },
+    "ZTI-006": {
+      "status": "EVIDENCE_NOT_FOUND",
+      "fatal": true,
+      "category": "ZERO_TOLERANCE"
+    },
+    "ZTI-007": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.90,
+      "category": "ZERO_TOLERANCE",
+      "expected_evidence_files": ["Agent_Onboarding_KYC_Verification.docx"]
+    },
+    "ZTI-008": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.85,
+      "category": "ZERO_TOLERANCE",
+      "compound_satisfied": true
+    },
+    "ZTI-009": {
+      "status": "PASS",
+      "fatal": true,
+      "min_confidence": 0.85,
+      "category": "ZERO_TOLERANCE",
+      "compound_satisfied": true
+    },
+    "ZTI-010": {
+      "status": "REVIEW",
+      "fatal": true,
+      "min_confidence": 0.80,
+      "category": "ZERO_TOLERANCE",
+      "requires_human_review": true
+    },
+    "GCI-001": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC"
+    },
+    "GCI-002": {
+      "status": "REVIEW",
+      "fatal": false,
+      "min_confidence": 0.85,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "policy_only": true
+    },
+    "GCI-003": {
+      "status": "EVIDENCE_NOT_FOUND",
+      "fatal": false,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC"
+    },
+    "GCI-004": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC"
+    },
+    "GCI-005": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC"
+    },
+    "GCI-006": {
+      "status": "REVIEW",
+      "fatal": false,
+      "min_confidence": 0.85,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC",
+      "policy_only": true
+    },
+    "GCI-007": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC"
+    },
+    "GCI-008": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "GOVERNANCE_COMPLIANCE_INFOSEC"
+    },
+    "IPM-001": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT"
+    },
+    "IPM-002": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT"
+    },
+    "IPM-003": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.85,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "compound_satisfied": true
+    },
+    "IPM-004": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT"
+    },
+    "IPM-005": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT"
+    },
+    "IPM-006": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.85,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "compound_satisfied": true
+    },
+    "IPM-007": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.85,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "group_satisfied": true
+    },
+    "IPM-008": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "recency_verified": true
+    },
+    "IPM-009": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.85,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT",
+      "group_satisfied": true
+    },
+    "IPM-010": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT"
+    },
+    "IPM-011": {
+      "status": "PASS",
+      "fatal": false,
+      "min_confidence": 0.90,
+      "category": "INFRASTRUCTURE_PROCESS_MANAGEMENT"
+    }
+  },
+  "negative_test_verifications": [
+    {
+      "test_name": "Filename Spoofing Protection",
+      "tested_file": "GST_Policy_Spoofed_Filename.pdf",
+      "expected_behavior": "Candidate identified but cannot satisfy control without validated content"
+    },
+    {
+      "test_name": "Generic Keyword-Only Protection",
+      "tested_file": "Generic_PF_ESIC_Policy_Keyword_Only.txt",
+      "expected_behavior": "Fails structured mandatory field check"
+    },
+    {
+      "test_name": "Expired Document Handling",
+      "tested_file": "Expired_Insurance_Policy_Sample.pdf",
+      "expected_behavior": "DateEvaluator correctly detects expiration relative to 2026-08-14"
+    },
+    {
+      "test_name": "Session-Level Entity Conflict",
+      "tested_file": "Conflicting_Police_Verification_Jane_Synthetic.txt",
+      "expected_behavior": "EntityResolver identifies AG-GOLD-001 collision across John Synthetic and Jane Synthetic"
+    }
+  ]
+}

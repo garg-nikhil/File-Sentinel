@@ -8,7 +8,8 @@
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "test": "tsx tests/test_suite.ts && tsx tests/audit_test_suite.ts && tsx tests/evidence_hardening_test_suite.ts && tsx tests/entity_resolution_test_suite.ts && tsx tests/date_remediation_test_suite.ts && tsx tests/compound_evidence_test_suite.ts && tsx tests/remediation_verification_suite.ts && tsx tests/golden-audit/golden-audit-test.ts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.22.0",

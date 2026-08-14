@@ -1,0 +1,4 @@
+# CCTV RECORDING RETENTION CONFIGURATION - 90 DAYS RETENTION LOG & DVR NVR STORAGE
+Device_Name,Storage_Pool,Allocated_TB,Recording_Mode,Configured_Retention_Days,Min_Retention_Guarantee,Status
+NVR-CORE-01,POOL-RAID5-01,16.0 TB,Continuous 24/7 1080p,90 days retention,90 Days Minimum,COMPLIANT
+NVR-CORE-01,POOL-RAID5-02,16.0 TB,Continuous 24/7 1080p,90 days retention,90 Days Minimum,COMPLIANT

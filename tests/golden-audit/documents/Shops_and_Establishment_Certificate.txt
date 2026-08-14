@@ -1,0 +1,13 @@
+SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET
+FORM C - GOVERNMENT OF MAHARASHTRA
+THE MAHARASHTRA SHOPS AND ESTABLISHMENTS ACT
+REGISTRATION CERTIFICATE OF COMMERCIAL ESTABLISHMENT
+
+Registration Certificate Number: SEC-MH-MUM-2026-8812
+Name of the Establishment: Sentinel Recovery & Telecalling Services Pvt Ltd
+Name of the Employer: John Synthetic (Managing Director)
+Address: Unit 401 & 402, Tech Park Alpha, Mumbai, Maharashtra - 400051
+Category: Commercial Establishment
+Date of Registration: 10/01/2024
+Renewed Up To: 31/12/2028
+Status: VALID AND ACTIVE

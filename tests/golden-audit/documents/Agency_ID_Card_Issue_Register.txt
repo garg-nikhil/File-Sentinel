@@ -1,0 +1,20 @@
+SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET
+AGENCY IDENTIFICATION CARD & FIELD ENDORSEMENT REGISTER
+Issuer: Sentinel Recovery & Telecalling Services Pvt Ltd
+
+CARD ISSUE RECORD:
+1. Agent Name: John Synthetic
+   Agent ID: AG-GOLD-001
+   Employee ID: EMP-GOLD-001
+   Designation: Senior Recovery Officer
+   ID Card Number: ID-GOLD-001
+   Field Endorsement Card Number: END-GOLD-001
+   Status: ACTIVE / VALID
+
+2. Agent Name: Jane Synthetic
+   Agent ID: AG-GOLD-002
+   Employee ID: EMP-GOLD-002
+   Designation: Telecalling Associate
+   ID Card Number: ID-GOLD-002
+   Field Endorsement Card Number: END-GOLD-002
+   Status: ACTIVE / VALID

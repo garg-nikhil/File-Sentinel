@@ -8,6 +8,65 @@ export type AuditCategory = 'ZERO_TOLERANCE' | 'GOVERNANCE_COMPLIANCE_INFOSEC' |
 
 export type RequirementLogic = 'SINGLE' | 'AND' | 'OR' | 'GROUP';
 
+export type DateSemanticType =
+  | 'ISSUE_DATE'
+  | 'EFFECTIVE_DATE'
+  | 'EXPIRY_DATE'
+  | 'REVIEW_DATE'
+  | 'APPLICATION_DATE'
+  | 'RENEWAL_DATE'
+  | 'AUDIT_DATE'
+  | 'UNKNOWN_DATE';
+
+export interface ExtractedDateItem {
+  value: string; // ISO format YYYY-MM-DD
+  type: DateSemanticType;
+  sourceText: string;
+  context?: string;
+  confidence?: number;
+}
+
+export interface SubControlRequirement {
+  id: string; // e.g., 'RENT_LEASE_AGREEMENT', 'SHOPS_ESTABLISHMENT_CERTIFICATE'
+  title?: string;
+  name?: string;
+  description?: string;
+  evidence_types?: string[];
+  evidenceTypes?: string[];
+  keywords?: string[];
+  required_evidence?: string[];
+  distinguish_policy?: boolean;
+  requires_implementation?: boolean;
+  requires_human_review?: boolean;
+  requires_validity_check?: boolean;
+  expiry_required?: boolean;
+  validity_type?: 'EXPIRY' | 'RECENCY';
+  max_age_days?: number;
+  logic?: RequirementLogic;
+  sub_requirements?: SubControlRequirement[];
+  requirements?: SubControlRequirement[];
+}
+
+export interface SubControlResult {
+  id: string;
+  title?: string;
+  name?: string;
+  description?: string;
+  status: AuditParameterStatus;
+  evidence: EvidenceItem[];
+  evidence_types?: string[];
+  reason?: string;
+  missing_requirements?: string[];
+  warnings?: string[];
+  policy_status?: PolicyImplementationStatus;
+  logic?: RequirementLogic;
+  children?: SubControlResult[];
+  sub_results?: SubControlResult[];
+  confidence?: number;
+  score_earned?: number;
+  max_score?: number;
+}
+
 export interface AuditParameter {
   id: string; // e.g., 'ZTI-001'
   category: AuditCategory;
@@ -20,11 +79,18 @@ export interface AuditParameter {
   keywords: string[];
   logic: RequirementLogic;
   sub_controls?: string[];
+  requirements?: SubControlRequirement[];
+  sub_requirements?: SubControlRequirement[];
   distinguish_policy?: boolean;
   requires_human_review?: boolean;
   requires_validity_check?: boolean;
   expiry_required?: boolean;
+  validity_type?: 'EXPIRY' | 'RECENCY';
+  requirement_type?: 'EXPIRY' | 'RECENCY';
+  max_age_days?: number;
   allow_filename_only?: boolean;
+  allow_keyword_only?: boolean;
+  evidence_types?: string[];
   evaluation_rules: string[];
   enabled: boolean;
 }
@@ -49,6 +115,19 @@ export interface EvidenceItem {
   field_validation?: boolean;
   semantic_match?: boolean;
   is_filename_only?: boolean;
+  is_content_only?: boolean;
+  // CamelCase property aliases
+  filenameMatch?: boolean;
+  contentMatch?: boolean;
+  metadataMatch?: boolean;
+  entityMatch?: boolean;
+  fieldValidation?: boolean;
+  semanticMatch?: boolean;
+  isFilenameOnly?: boolean;
+  isContentOnly?: boolean;
+  validated?: boolean;
+  satisfiesControl?: boolean;
+  confidence?: number;
 }
 
 export interface AIRecommendation {
@@ -70,8 +149,11 @@ export interface AuditOverride {
 
 export interface AuditParameterResult {
   parameter_id: string;
+  parentParameterId?: string;
   parameter: AuditParameter;
   status: AuditParameterStatus;
+  finalStatus?: AuditParameterStatus;
+  logic?: RequirementLogic;
   confidence: number;
   fatal: boolean;
   score_earned: number;
@@ -79,12 +161,128 @@ export interface AuditParameterResult {
   policy_status?: PolicyImplementationStatus;
   pv_status?: PoliceVerificationStatus;
   sub_control_statuses?: Record<string, AuditParameterStatus>;
+  sub_control_results?: SubControlResult[];
+  children?: SubControlResult[];
   evidence: EvidenceItem[];
   reason: string;
   missing_requirements: string[];
   warnings: string[];
   ai_recommendation?: AIRecommendation;
   override?: AuditOverride;
+}
+
+export interface EntityEvidenceReference {
+  parameterId: string;
+  parameterTitle?: string;
+  fileId: string;
+  filename: string;
+  evidenceId?: string;
+  confidence?: number;
+  extractedName?: string;
+  extractedAgentId?: string;
+  extractedEmployeeId?: string;
+  extractedCertNumber?: string;
+  extractedFields?: Record<string, any>;
+  // Snake_case aliases
+  parameter_id?: string;
+  parameter_title?: string;
+  file_id?: string;
+  evidence_id?: string;
+  extracted_name?: string;
+  extracted_agent_id?: string;
+  extracted_employee_id?: string;
+  extracted_cert_number?: string;
+  extracted_fields?: Record<string, any>;
+}
+
+export interface EntityConflict {
+  conflictType: 'AGENT_ID_NAME_MISMATCH' | 'EMPLOYEE_ID_NAME_MISMATCH' | 'CERTIFICATE_NUMBER_MISMATCH' | 'IDENTITY_ATTRIBUTE_CONFLICT' | 'POSSIBLE_ENTITY_MISMATCH';
+  severity: 'REVIEW' | 'WARNING';
+  title: string;
+  description: string;
+  reason: string;
+  involvedEvidence: EntityEvidenceReference[];
+  conflictingAttributes: {
+    attribute: string;
+    values: string[];
+  };
+  // Snake_case aliases
+  conflict_type?: string;
+  involved_evidence?: EntityEvidenceReference[];
+  conflicting_attributes?: {
+    attribute: string;
+    values: string[];
+  };
+}
+
+export interface AuditEntity {
+  entityId: string;
+  entityType: 'PERSON' | 'ORGANIZATION' | 'AGENCY';
+  displayName: string;
+  normalizedName: string;
+  identifiers: {
+    employeeId: string | null;
+    agentId: string | null;
+    certificateNumber: string | null;
+    email: string | null;
+    phone: string | null;
+    agencyId?: string | null;
+    // Snake_case aliases
+    employee_id?: string | null;
+    agent_id?: string | null;
+    certificate_number?: string | null;
+    agency_id?: string | null;
+  };
+  evidenceReferences: EntityEvidenceReference[];
+  matchingSignals: string[];
+  confidence: number;
+  status: 'CONSISTENT' | 'REVIEW';
+  conflicts: EntityConflict[];
+  auditSessionId?: string;
+  createdAt: string;
+  // Snake_case aliases
+  entity_id?: string;
+  entity_type?: 'PERSON' | 'ORGANIZATION' | 'AGENCY';
+  display_name?: string;
+  normalized_name?: string;
+  evidence_references?: EntityEvidenceReference[];
+  matching_signals?: string[];
+  audit_session_id?: string;
+  created_at?: string;
+}
+
+export interface AuditEntityFinding {
+  findingId: string;
+  entityId: string;
+  title: string;
+  status: 'REVIEW';
+  reason: string;
+  conflictingAttributes: Record<string, string[]>;
+  evidenceReferences: EntityEvidenceReference[];
+  createdAt: string;
+  // Snake_case aliases
+  finding_id?: string;
+  entity_id?: string;
+  conflicting_attributes?: Record<string, string[]>;
+  evidence_references?: EntityEvidenceReference[];
+  created_at?: string;
+}
+
+export interface AuditSessionEntityResolutionResult {
+  entities: AuditEntity[];
+  conflicts: EntityConflict[];
+  entityFindings: AuditEntityFinding[];
+  summary: {
+    totalEntities: number;
+    consistentCount: number;
+    reviewCount: number;
+    // Snake_case aliases
+    total_entities?: number;
+    consistent_count?: number;
+    review_count?: number;
+  };
+  // Snake_case aliases
+  entity_findings?: AuditEntityFinding[];
 }
 
 export interface AuditSession {
@@ -106,6 +304,14 @@ export interface AuditSession {
   created_at: string;
   updated_at: string;
   parameter_results?: AuditParameterResult[];
+  entities?: AuditEntity[];
+  entity_conflicts?: EntityConflict[];
+  entity_findings?: AuditEntityFinding[];
+  entity_resolution?: AuditSessionEntityResolutionResult;
+  // CamelCase aliases
+  entityConflicts?: EntityConflict[];
+  entityFindings?: AuditEntityFinding[];
+  entityResolution?: AuditSessionEntityResolutionResult;
 }
 
 export interface EvidenceGap {

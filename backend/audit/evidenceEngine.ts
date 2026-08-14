@@ -6,6 +6,7 @@ import { EvidenceMatcher } from './evidenceMatcher.js';
 import { AuditEvaluator } from './evaluator.js';
 import { evaluateEvidenceWithGemini } from './aiClassifier.ts';
 import { AuditScoringEngine } from './scoring.js';
+import { EntityResolver } from './entityResolver.js';
 import {
   AuditGap,
   AuditParameter,
@@ -109,6 +110,21 @@ export class EvidenceEngine {
       parameterResults
     );
 
+    // Perform True Session-Level Entity Resolution across all validated evidence
+    const entityResolution = EntityResolver.resolveAuditSessionEntities(parameterResults, auditId);
+    session.entities = entityResolution.entities;
+    session.entity_conflicts = entityResolution.conflicts;
+    session.entity_findings = entityResolution.entityFindings;
+    session.entity_resolution = entityResolution;
+    session.entityConflicts = entityResolution.conflicts;
+    session.entityFindings = entityResolution.entityFindings;
+    session.entityResolution = entityResolution;
+
+    // If entity conflicts exist and overall status was compliant, flag that review is needed
+    if (entityResolution.conflicts.length > 0 && session.overall_status === 'COMPLIANT') {
+      session.overall_status = 'NEEDS_REVIEW';
+    }
+
     // Save to Database
     this.saveAuditSessionToDb(session);
 
@@ -211,6 +227,61 @@ export class EvidenceEngine {
             JSON.stringify(res.warnings),
             res.ai_recommendation ? JSON.stringify(res.ai_recommendation) : null,
             res.override ? JSON.stringify(res.override) : null
+          );
+        }
+      }
+
+      // Save Entities
+      if (session.entities && session.entities.length > 0) {
+        const entityStmt = this.db.prepare(`
+          INSERT OR REPLACE INTO audit_entities (
+            entity_id, audit_id, entity_type, display_name, normalized_name,
+            identifiers_json, evidence_references_json, matching_signals_json,
+            confidence, status, conflicts_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const ent of session.entities) {
+          entityStmt.run(
+            ent.entityId,
+            session.audit_id,
+            ent.entityType,
+            ent.displayName,
+            ent.normalizedName,
+            JSON.stringify(ent.identifiers),
+            JSON.stringify(ent.evidenceReferences),
+            JSON.stringify(ent.matchingSignals),
+            ent.confidence,
+            ent.status,
+            JSON.stringify(ent.conflicts),
+            ent.createdAt
+          );
+        }
+      }
+
+      // Save Entity Conflicts
+      if (session.entity_conflicts && session.entity_conflicts.length > 0) {
+        const conflictStmt = this.db.prepare(`
+          INSERT INTO audit_entity_conflicts (
+            id, audit_id, entity_id, conflict_type, severity,
+            title, description, reason, involved_evidence_json,
+            conflicting_attributes_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        for (const conf of session.entity_conflicts) {
+          conflictStmt.run(
+            `CONF-${crypto.randomUUID().substring(0, 8)}`,
+            session.audit_id,
+            conf.involvedEvidence[0]?.fileId || 'UNKNOWN_ENTITY',
+            conf.conflictType,
+            conf.severity,
+            conf.title,
+            conf.description,
+            conf.reason,
+            JSON.stringify(conf.involvedEvidence),
+            JSON.stringify(conf.conflictingAttributes),
+            new Date().toISOString()
           );
         }
       }

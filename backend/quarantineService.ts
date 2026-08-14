@@ -80,7 +80,7 @@ export class GoogleCloudStorageProvider implements CloudStorageProvider {
       if (!exists) return { exists: false };
 
       const [metadata] = await file.getMetadata();
-      const customSha256 = metadata.metadata?.sha256;
+      const customSha256 = metadata.metadata?.sha256 ? String(metadata.metadata.sha256) : undefined;
       const size = Number(metadata.size) || 0;
 
       return {

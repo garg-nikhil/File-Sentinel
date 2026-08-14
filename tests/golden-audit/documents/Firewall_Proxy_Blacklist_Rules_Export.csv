@@ -1,0 +1,8 @@
+# WEB FILTERING AND SOCIAL MEDIA ACCESS RESTRICTION FIREWALL PROXY BLACKLIST EXPORT
+Rule_ID,Category,Target_Domain_Pattern,Action,Firewall_Zone,Log_Status
+RULE-FW-0101,Social Media Blacklist,*facebook.com*,DENY,Floor-VLAN-10,ENABLED
+RULE-FW-0102,Social Media Blacklist,*instagram.com*,DENY,Floor-VLAN-10,ENABLED
+RULE-FW-0103,Social Media Blacklist,*twitter.com*,DENY,Floor-VLAN-10,ENABLED
+RULE-FW-0104,Personal Email Blacklist,*mail.google.com*,DENY,Floor-VLAN-10,ENABLED
+RULE-FW-0105,Personal Email Blacklist,*mail.yahoo.com*,DENY,Floor-VLAN-10,ENABLED
+RULE-FW-0106,Messaging Apps Blacklist,*web.whatsapp.com*,DENY,Floor-VLAN-10,ENABLED

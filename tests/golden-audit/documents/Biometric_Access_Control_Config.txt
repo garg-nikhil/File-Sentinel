@@ -1,0 +1,9 @@
+SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET
+AGENCY ACCESS CONTROL & BIOMETRIC SYSTEM CONFIGURATION
+System: BioEntry W2 Fingerprint Reader & RFID Card Reader Log System
+IP Address: 192.168.10.15
+MAC Address: 00:1A:2B:3C:4D:5E
+Terminal Config: Controller ID DAC-01 Door Access Controller Active
+Daily Access Log:
+2026-08-14 08:30:15 - Badge ID: AG-GOLD-001 - John Synthetic - PUNCH IN - Access Granted
+2026-08-14 08:35:22 - Badge ID: AG-GOLD-002 - Jane Synthetic - PUNCH IN - Access Granted
