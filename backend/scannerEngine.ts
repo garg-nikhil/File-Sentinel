@@ -62,7 +62,7 @@ export class FileScannerEngine {
           try {
             const projectRootReal = fs.realpathSync(process.cwd());
             const relToProject = path.relative(projectRootReal, baseRootReal);
-            const isOutsideProject = relToProject === '..' || relToProject.startsWith('..' + path.sep) || relToProject.startsWith('../') || rel.startsWith('..\\') || path.isAbsolute(relToProject);
+            const isOutsideProject = relToProject === '..' || relToProject.startsWith('..' + path.sep) || relToProject.startsWith('../') || relToProject.startsWith('..\\') || path.isAbsolute(relToProject);
             if (isOutsideProject) {
               return discovered;
             }

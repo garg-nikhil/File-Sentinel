@@ -55,8 +55,9 @@ export class GoogleCloudStorageProvider implements CloudStorageProvider {
     try {
       const meta = await this.getMetadata(cloudObjectName);
       if (!meta || !meta.exists) return false;
-      if (meta.size === 0) return false;
-      if (meta.sha256 && meta.sha256 !== expectedSHA256) return false;
+      if (!meta.sha256) return false; // Missing SHA-256 metadata MUST result in failure
+      if (meta.sha256 !== expectedSHA256) return false;
+      if (meta.size === undefined || meta.size <= 0) return false;
       return true;
     } catch {
       return false;
@@ -124,14 +125,12 @@ export class LocalCloudStorageProvider implements CloudStorageProvider {
 
   async verify(cloudObjectName: string, expectedSHA256: string): Promise<boolean> {
     try {
-      const targetPath = path.join(this.bucketPath, cloudObjectName);
-      if (!fs.existsSync(targetPath)) return false;
-
-      const buffer = fs.readFileSync(targetPath);
-      const crypto = await import('node:crypto');
-      const hash = crypto.createHash('sha256').update(buffer).digest('hex');
-
-      return hash === expectedSHA256;
+      const meta = await this.getMetadata(cloudObjectName);
+      if (!meta || !meta.exists) return false;
+      if (!meta.sha256) return false;
+      if (meta.sha256 !== expectedSHA256) return false;
+      if (meta.size === undefined || meta.size <= 0) return false;
+      return true;
     } catch {
       return false;
     }

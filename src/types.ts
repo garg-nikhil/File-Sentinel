@@ -6,7 +6,7 @@ export type Classification = 'RESTRICTED' | 'CONFIDENTIAL' | 'INTERNAL' | 'PUBLI
 
 export type FindingSource = 'RULE' | 'HEURISTIC' | 'AI';
 
-export type ScanStatus = 'PENDING' | 'SCANNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type ScanStatus = 'PENDING' | 'SCANNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'SCAN_LIMIT_EXCEEDED';
 
 export interface Rule {
   id: string;

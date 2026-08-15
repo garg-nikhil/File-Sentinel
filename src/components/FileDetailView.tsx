@@ -30,11 +30,6 @@ export const FileDetailView: React.FC<FileDetailViewProps> = ({ fileId, onBack }
   const [aiResult, setAiResult] = useState<AISummary | null>(null);
   const [quarantineMsg, setQuarantineMsg] = useState<string | null>(null);
 
-  // Upload & Remove execution state
-  const [isProcessingRemoval, setIsProcessingRemoval] = useState(false);
-  const [removalLogs, setRemovalLogs] = useState<string[]>([]);
-  const [removalSuccess, setRemovalSuccess] = useState<boolean | null>(null);
-
   useEffect(() => {
     loadFileDetail();
   }, [fileId]);
@@ -88,34 +83,7 @@ export const FileDetailView: React.FC<FileDetailViewProps> = ({ fileId, onBack }
     }
   };
 
-  const handleUploadAndRemove = async () => {
-    if (!window.confirm('Are you sure you want to verify upload to Cloud Quarantine and delete this file locally?')) {
-      return;
-    }
 
-    try {
-      setIsProcessingRemoval(true);
-      setRemovalLogs(['[Client] Initiating Upload & Remove pipeline...']);
-      const res = await api.uploadAndRemove(fileId);
-
-      if (res.logs) {
-        setRemovalLogs(res.logs);
-      }
-
-      if (res.success && res.local_deleted) {
-        setRemovalSuccess(true);
-        // Refresh file state
-        loadFileDetail();
-      } else {
-        setRemovalSuccess(false);
-      }
-    } catch (err: any) {
-      setRemovalSuccess(false);
-      setRemovalLogs(prev => [...prev, `[Client Error] ${err.message || 'Pipeline aborted'}`]);
-    } finally {
-      setIsProcessingRemoval(false);
-    }
-  };
 
   if (loading || !file) {
     return (
@@ -144,14 +112,6 @@ export const FileDetailView: React.FC<FileDetailViewProps> = ({ fileId, onBack }
           >
             <Lock className="w-3.5 h-3.5" />
             Stage Quarantine
-          </button>
-          <button
-            onClick={handleUploadAndRemove}
-            disabled={isProcessingRemoval}
-            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-semibold rounded-lg transition-colors shadow-md flex items-center gap-2 disabled:opacity-50"
-          >
-            <CloudUpload className="w-3.5 h-3.5" />
-            Upload & Remove
           </button>
         </div>
       </div>
@@ -216,29 +176,7 @@ export const FileDetailView: React.FC<FileDetailViewProps> = ({ fileId, onBack }
         </div>
       </div>
 
-      {/* Upload & Remove Verification Console */}
-      {removalLogs.length > 0 && (
-        <div className="bg-slate-950 border border-slate-800 rounded-xl p-5 space-y-3 font-mono text-xs">
-          <div className="flex items-center justify-between text-slate-300 font-semibold border-b border-slate-800 pb-2">
-            <span className="flex items-center gap-2">
-              <Terminal className="w-4 h-4 text-emerald-400" />
-              Verified Cloud Upload & Removal Pipeline Console
-            </span>
-            {removalSuccess !== null && (
-              <span className={removalSuccess ? 'text-emerald-400' : 'text-red-400'}>
-                {removalSuccess ? 'VERIFIED REMOVAL SUCCESSFUL' : 'VERIFICATION FAILED - FILE PRESERVED'}
-              </span>
-            )}
-          </div>
-          <div className="space-y-1.5 max-h-48 overflow-y-auto text-slate-400 bg-slate-900/60 p-3 rounded-lg">
-            {removalLogs.map((log, idx) => (
-              <div key={idx} className={log.includes('ERROR') ? 'text-red-400' : log.includes('SUCCESS') ? 'text-emerald-400' : 'text-slate-300'}>
-                {log}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+
 
       {/* Gemini AI Semantic Analysis Section */}
       <div className="bg-slate-900 border border-purple-500/30 rounded-xl p-6 space-y-4">

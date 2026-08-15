@@ -110,12 +110,7 @@ export const api = {
     return res.json();
   },
 
-  async uploadAndRemove(fileId: string) {
-    const res = await fetch(`/api/quarantine/${fileId}/upload-and-remove`, {
-      method: 'POST'
-    });
-    return res.json();
-  },
+
 
   async getAuditLogs() {
     const res = await fetch('/api/audit-logs');
