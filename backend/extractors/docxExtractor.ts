@@ -30,7 +30,8 @@ export class DOCXExtractor extends BaseExtractor {
           size: stats.size,
           created: stats.birthtime,
           modified: stats.mtime,
-          skipped: true
+          skipped: true,
+          error: true
         },
         links,
         embeddedObjects,
@@ -40,6 +41,28 @@ export class DOCXExtractor extends BaseExtractor {
     }
 
     const fileBuffer = fs.readFileSync(filePath);
+
+    // --- ARCHIVE BOMB & ZIP INSPECTION ---
+    const { inspectZipArchive, RESOURCE_LIMITS } = await import('../resourceLimits.js');
+    const zipCheck = await inspectZipArchive(fileBuffer);
+    if (!zipCheck.valid) {
+      warnings.push(zipCheck.reason || 'RESOURCE_LIMIT_EXCEEDED: Archive inspection failed.');
+      return {
+        text: '',
+        metadata: {
+          extension: '.docx',
+          size: stats.size,
+          created: stats.birthtime,
+          modified: stats.mtime,
+          error: true,
+          resourceLimitExceeded: true
+        },
+        links,
+        embeddedObjects,
+        structure,
+        warnings
+      };
+    }
 
     // --- STEP 1: Main Text & Paragraphs Extraction via Mammoth ---
     let bodyText = '';
@@ -53,6 +76,13 @@ export class DOCXExtractor extends BaseExtractor {
       }
     } catch (mErr: any) {
       warnings.push(`DOCX text extraction error: ${mErr.message || 'Corrupt document body'}`);
+    }
+
+    // Enforce maxExtractedTextBytes
+    if (bodyText.length > RESOURCE_LIMITS.maxExtractedTextBytes) {
+      bodyText = bodyText.substring(0, RESOURCE_LIMITS.maxExtractedTextBytes);
+      warnings.push('RESOURCE_LIMIT_EXCEEDED: Extracted text exceeded maximum allowed limit. Truncated; evidence incomplete.');
+      structure.truncated = true;
     }
 
     // --- STEP 2: OOXML Zip Package Structure Inspection ---

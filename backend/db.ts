@@ -98,6 +98,22 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         logs_json TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS file_cloud_uploads (
+        file_id TEXT PRIMARY KEY,
+        scan_id TEXT,
+        audit_session_id TEXT,
+        original_filename TEXT NOT NULL,
+        local_path TEXT NOT NULL,
+        sha256 TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        cloud_bucket TEXT NOT NULL,
+        cloud_object_name TEXT NOT NULL,
+        upload_status TEXT NOT NULL,
+        uploaded_at TEXT,
+        verified_at TEXT,
+        error_message TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS audit_events (
         id TEXT PRIMARY KEY,
         timestamp TEXT NOT NULL,

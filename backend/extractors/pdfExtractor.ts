@@ -107,7 +107,13 @@ export class PDFExtractor extends BaseExtractor {
       ''
     ].filter(Boolean).join('\n');
 
-    const fullText = `${textHeader}\n${pdfText}`;
+    let fullText = `${textHeader}\n${pdfText}`;
+    const { RESOURCE_LIMITS } = await import('../resourceLimits.js');
+    if (fullText.length > RESOURCE_LIMITS.maxExtractedTextBytes) {
+      fullText = fullText.substring(0, RESOURCE_LIMITS.maxExtractedTextBytes);
+      warnings.push('RESOURCE_LIMIT_EXCEEDED: Extracted text exceeded maximum allowed limit. Truncated; evidence incomplete.');
+      structure.truncated = true;
+    }
 
     return {
       text: fullText,

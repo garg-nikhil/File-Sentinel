@@ -36,49 +36,93 @@ export class FileScannerEngine {
     maxDepth: number = 10,
     currentDepth: number = 0,
     discovered: string[] = [],
-    visitedPaths: Set<string> = new Set()
+    visitedPaths: Set<string> = new Set(),
+    rootRealPath?: string
   ): string[] {
     if (currentDepth > maxDepth) return discovered;
 
-    // Resolve & normalize path for security (FINDING-05)
-    const resolvedPath = path.resolve(rootPath);
-    const normalizedPath = path.normalize(resolvedPath);
-
-    // Enforce BASE_ALLOWED_DIR restriction if configured
-    const baseAllowed = process.env.BASE_ALLOWED_DIR ? path.resolve(process.env.BASE_ALLOWED_DIR) : null;
-    if (baseAllowed) {
-      const rel = path.relative(baseAllowed, normalizedPath);
-      if (rel.startsWith('..') || path.isAbsolute(rel)) {
-        throw new Error(`Access denied: Requested path '${normalizedPath}' is outside the allowed directory '${baseAllowed}'`);
-      }
-    }
-
-    if (!fs.existsSync(normalizedPath)) return discovered;
-
     try {
-      const realPath = fs.realpathSync(normalizedPath);
-      if (visitedPaths.has(realPath)) return discovered; // Prevent infinite recursion on symlinks
-      visitedPaths.add(realPath);
+      if (!fs.existsSync(rootPath) && !fs.lstatSync(rootPath).isSymbolicLink()) return discovered;
 
-      const stats = fs.statSync(normalizedPath);
+      let baseRootReal = rootRealPath;
+      if (!baseRootReal) {
+        try {
+          const lstats = fs.lstatSync(rootPath);
+          if (lstats.isDirectory() && !lstats.isSymbolicLink()) {
+            baseRootReal = fs.realpathSync(rootPath);
+          } else {
+            baseRootReal = fs.realpathSync(path.dirname(rootPath));
+          }
+        } catch {
+          baseRootReal = fs.realpathSync(path.dirname(rootPath));
+        }
+
+        // Default project containment: baseRootReal must be contained within process.cwd() unless BASE_ALLOWED_DIR is set
+        if (!process.env.BASE_ALLOWED_DIR) {
+          try {
+            const projectRootReal = fs.realpathSync(process.cwd());
+            const relToProject = path.relative(projectRootReal, baseRootReal);
+            const isOutsideProject = relToProject === '..' || relToProject.startsWith('..' + path.sep) || relToProject.startsWith('../') || rel.startsWith('..\\') || path.isAbsolute(relToProject);
+            if (isOutsideProject) {
+              return discovered;
+            }
+          } catch {}
+        }
+      }
+
+      let realTarget: string;
+      try {
+        realTarget = fs.realpathSync(rootPath);
+      } catch {
+        return discovered;
+      }
+
+      // Containment check against baseRootReal
+      const rel = path.relative(baseRootReal, realTarget);
+      const isOutside = rel === '..' || rel.startsWith('..' + path.sep) || rel.startsWith('../') || rel.startsWith('..\\') || path.isAbsolute(rel);
+      if (isOutside) {
+        return discovered;
+      }
+
+      // Enforce BASE_ALLOWED_DIR restriction if configured
+      const baseAllowed = process.env.BASE_ALLOWED_DIR ? process.env.BASE_ALLOWED_DIR : null;
+      if (baseAllowed) {
+        try {
+          const baseAllowedReal = fs.realpathSync(baseAllowed);
+          const allowedRel = path.relative(baseAllowedReal, realTarget);
+          if (allowedRel === '..' || allowedRel.startsWith('..' + path.sep) || allowedRel.startsWith('../') || allowedRel.startsWith('..\\') || path.isAbsolute(allowedRel)) {
+            throw new Error(`Access denied: Requested path '${rootPath}' is outside the allowed directory '${baseAllowed}'`);
+          }
+        } catch (err: any) {
+          if (err.message && err.message.startsWith('Access denied')) {
+            throw err;
+          }
+          throw new Error(`Access denied: Requested path '${rootPath}' is outside the allowed directory '${baseAllowed}'`);
+        }
+      }
+
+      if (visitedPaths.has(realTarget)) return discovered;
+      visitedPaths.add(realTarget);
+
+      const stats = fs.statSync(rootPath);
       if (stats.isFile()) {
-        if (this.isSupportedFile(normalizedPath)) {
-          discovered.push(normalizedPath);
+        if (this.isSupportedFile(rootPath)) {
+          discovered.push(rootPath);
         }
       } else if (stats.isDirectory()) {
-        const entries = fs.readdirSync(normalizedPath);
+        const entries = fs.readdirSync(rootPath);
         for (const entry of entries) {
           // Ignore node_modules, .git, dist, build for speed & safety
           if (['node_modules', '.git', 'dist', 'build', '.cache', '.aistudio'].includes(entry)) continue;
-          const fullPath = path.join(normalizedPath, entry);
-          this.discoverFiles(fullPath, maxDepth, currentDepth + 1, discovered, visitedPaths);
+          const fullPath = path.join(rootPath, entry);
+          this.discoverFiles(fullPath, maxDepth, currentDepth + 1, discovered, visitedPaths, baseRootReal);
         }
       }
     } catch (err: any) {
       if (err.message && err.message.startsWith('Access denied')) {
         throw err;
       }
-      console.warn(`[Discovery] Skipped path ${normalizedPath}:`, err);
+      console.warn(`[Discovery] Skipped path ${rootPath}:`, err);
     }
 
     return discovered;
@@ -308,33 +352,129 @@ export class FileScannerEngine {
     const maxScanDepth = settings?.maxScanDepth ?? 10;
     const maxFileSizeMB = settings?.maxFileSizeMB ?? 50;
 
+    const { RESOURCE_LIMITS, withTimeout } = await import('./resourceLimits.js');
+
     // Discover files up to maxScanDepth
     const allDiscovered = this.discoverFiles(rootPath, maxScanDepth);
     session.total_files = allDiscovered.length;
     session.supported_files = allDiscovered.length;
 
-    for (let i = 0; i < allDiscovered.length; i++) {
+    let filesToProcess = allDiscovered;
+    if (allDiscovered.length > RESOURCE_LIMITS.maxBatchFiles) {
+      session.status = 'SCAN_LIMIT_EXCEEDED';
+      filesToProcess = allDiscovered.slice(0, RESOURCE_LIMITS.maxBatchFiles);
+    }
+
+    const concurrency = RESOURCE_LIMITS.maxConcurrentParsers;
+
+    for (let chunkIdx = 0; chunkIdx < filesToProcess.length; chunkIdx += concurrency) {
       if (this.scanAbortControllers.get(scanId)) {
         session.status = 'CANCELLED';
         break;
       }
 
-      const filePath = allDiscovered[i];
-      session.current_file = path.basename(filePath);
+      const chunk = filesToProcess.slice(chunkIdx, chunkIdx + concurrency);
 
-      try {
-        const stats = fs.statSync(filePath);
-        const sha256 = this.calculateSHA256(filePath);
-        const fileId = `FILE-${crypto.randomUUID().substring(0, 8)}`;
+      await Promise.all(chunk.map(async (filePath) => {
+        session.current_file = path.basename(filePath);
 
-        // Check if file size exceeds configured limit before processing
-        if (stats.size > maxFileSizeMB * 1024 * 1024) {
+        try {
+          const stats = fs.statSync(filePath);
+          const sha256 = this.calculateSHA256(filePath);
+          const fileId = `FILE-${crypto.randomUUID().substring(0, 8)}`;
+
+          // Check if file size exceeds configured limit before processing
+          if (stats.size > maxFileSizeMB * 1024 * 1024) {
+            const fileStmt = this.db.prepare(`
+              INSERT INTO files (
+                file_id, scan_id, path, filename, extension, size, sha256,
+                risk_score, classification, scan_status, created_at, modified_at,
+                extracted_text_preview, metadata_json, warnings_json
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', ?, ?)
+            `);
+            fileStmt.run(
+              fileId,
+              scanId,
+              filePath,
+              path.basename(filePath),
+              path.extname(filePath).toLowerCase(),
+              stats.size,
+              sha256,
+              stats.birthtime.toISOString(),
+              stats.mtime.toISOString(),
+              JSON.stringify({ extension: path.extname(filePath).toLowerCase(), size: stats.size, skipped: true }),
+              JSON.stringify([`File exceeds configured maximum scan size (${maxFileSizeMB} MB)`])
+            );
+
+            session.processed_files++;
+            return;
+          }
+
+          // Safe Modular Extraction with Timeout
+          let extraction: ExtractionResult;
+          let scanStatus: 'SUCCESS' | 'ERROR' | 'SKIPPED' = 'SUCCESS';
+
+          try {
+            extraction = await withTimeout(this.extractContent(filePath, maxFileSizeMB), RESOURCE_LIMITS.processingTimeoutMs);
+          } catch (timeoutErr: any) {
+            const isTimeout = timeoutErr.code === 'PROCESSING_TIMEOUT' || (timeoutErr.message && timeoutErr.message.includes('PROCESSING_TIMEOUT'));
+            const statusMsg = isTimeout ? 'PROCESSING_TIMEOUT' : 'EXTRACTION_ERROR';
+            extraction = {
+              text: '',
+              metadata: { extension: path.extname(filePath), size: stats.size, error: true, [statusMsg.toLowerCase()]: true },
+              links: [],
+              embeddedObjects: [],
+              structure: {},
+              warnings: [timeoutErr.message || 'Processing timeout or fatal error']
+            };
+            scanStatus = 'ERROR';
+            session.error_count++;
+          }
+
+          const text = extraction.text || '';
+          const metadata = extraction.metadata || {};
+          const warnings = extraction.warnings || [];
+
+          if (metadata.error || metadata.resourceLimitExceeded || metadata.processing_timeout) {
+            scanStatus = 'ERROR';
+            session.error_count++;
+          }
+
+          // Evaluate Rules on full extracted text
+          const findings = this.evaluateRules(extraction, rules);
+          for (const f of findings) {
+            f.file_id = fileId;
+          }
+
+          let { score: riskScore, classification } = this.calculateRiskScore(findings);
+
+          // Evidence Safety: Incomplete extraction / truncation must not falsely PASS
+          if (metadata.truncated || metadata.resourceLimitExceeded || warnings.some(w => w.includes('RESOURCE_LIMIT_EXCEEDED'))) {
+            if (classification === 'PUBLIC') {
+              classification = 'CONFIDENTIAL';
+              riskScore = Math.max(riskScore, 50);
+            }
+          }
+
+          // Track stats counts
+          for (const f of findings) {
+            if (f.severity === 'CRITICAL') session.critical_count++;
+            else if (f.severity === 'HIGH') session.high_count++;
+            else if (f.severity === 'MEDIUM') session.medium_count++;
+            else if (f.severity === 'LOW') session.low_count++;
+          }
+
+          if (findings.length === 0 && scanStatus === 'SUCCESS') {
+            session.safe_count++;
+          }
+
+          // Insert File Record
           const fileStmt = this.db.prepare(`
             INSERT INTO files (
               file_id, scan_id, path, filename, extension, size, sha256,
               risk_score, classification, scan_status, created_at, modified_at,
               extracted_text_preview, metadata_json, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           fileStmt.run(
             fileId,
@@ -344,110 +484,51 @@ export class FileScannerEngine {
             path.extname(filePath).toLowerCase(),
             stats.size,
             sha256,
+            riskScore,
+            classification,
+            scanStatus,
             stats.birthtime.toISOString(),
             stats.mtime.toISOString(),
-            JSON.stringify({ extension: path.extname(filePath).toLowerCase(), size: stats.size, skipped: true }),
-            JSON.stringify([`File exceeds configured maximum scan size (${maxFileSizeMB} MB)`])
+            text.substring(0, 500),
+            JSON.stringify(metadata),
+            JSON.stringify(warnings)
           );
 
-          session.processed_files++;
-          continue;
-        }
+          // Insert Findings Records
+          const findingStmt = this.db.prepare(`
+            INSERT INTO findings (
+              finding_id, file_id, rule_id, severity, category, title,
+              description, evidence_json, confidence, source, recommendation, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
 
-        // Safe Modular Extraction
-        const extraction = await this.extractContent(filePath, maxFileSizeMB);
-        const text = extraction.text || '';
-        const metadata = extraction.metadata || {};
-        const warnings = extraction.warnings || [];
+          for (const f of findings) {
+            findingStmt.run(
+              f.finding_id,
+              fileId,
+              f.rule_id,
+              f.severity,
+              f.category,
+              f.title,
+              f.description,
+              JSON.stringify(f.evidence),
+              f.confidence,
+              f.source,
+              f.recommendation,
+              f.created_at
+            );
+          }
 
-        let scanStatus: 'SUCCESS' | 'ERROR' | 'SKIPPED' = 'SUCCESS';
-        if (metadata.error) {
-          scanStatus = 'ERROR';
+        } catch (err: any) {
           session.error_count++;
+          console.error(`Error scanning file ${filePath}:`, err);
         }
 
-        // Evaluate Rules on full extracted text
-        const findings = this.evaluateRules(extraction, rules);
-        for (const f of findings) {
-          f.file_id = fileId;
-        }
-
-        const { score: riskScore, classification } = this.calculateRiskScore(findings);
-
-        // Track stats counts
-        for (const f of findings) {
-          if (f.severity === 'CRITICAL') session.critical_count++;
-          else if (f.severity === 'HIGH') session.high_count++;
-          else if (f.severity === 'MEDIUM') session.medium_count++;
-          else if (f.severity === 'LOW') session.low_count++;
-        }
-
-        if (findings.length === 0 && scanStatus === 'SUCCESS') {
-          session.safe_count++;
-        }
-
-        // Insert File Record
-        const fileStmt = this.db.prepare(`
-          INSERT INTO files (
-            file_id, scan_id, path, filename, extension, size, sha256,
-            risk_score, classification, scan_status, created_at, modified_at,
-            extracted_text_preview, metadata_json, warnings_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-        fileStmt.run(
-          fileId,
-          scanId,
-          filePath,
-          path.basename(filePath),
-          path.extname(filePath).toLowerCase(),
-          stats.size,
-          sha256,
-          riskScore,
-          classification,
-          scanStatus,
-          stats.birthtime.toISOString(),
-          stats.mtime.toISOString(),
-          text.substring(0, 500),
-          JSON.stringify(metadata),
-          JSON.stringify(warnings)
-        );
-
-        // Insert Findings Records
-        const findingStmt = this.db.prepare(`
-          INSERT INTO findings (
-            finding_id, file_id, rule_id, severity, category, title,
-            description, evidence_json, confidence, source, recommendation, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `);
-
-        for (const f of findings) {
-          findingStmt.run(
-            f.finding_id,
-            fileId,
-            f.rule_id,
-            f.severity,
-            f.category,
-            f.title,
-            f.description,
-            JSON.stringify(f.evidence),
-            f.confidence,
-            f.source,
-            f.recommendation,
-            f.created_at
-          );
-        }
-
-      } catch (err: any) {
-        session.error_count++;
-        console.error(`Error scanning file ${filePath}:`, err);
-      }
-
-      session.processed_files++;
-      // Yield execution slightly for UI responsiveness
-      await new Promise(resolve => setTimeout(resolve, 10));
+        session.processed_files++;
+      }));
     }
 
-    if (session.status !== 'CANCELLED') {
+    if (session.status !== 'CANCELLED' && session.status !== 'SCAN_LIMIT_EXCEEDED') {
       session.status = 'COMPLETED';
     }
     session.end_time = new Date().toISOString();

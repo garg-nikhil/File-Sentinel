@@ -2,6 +2,9 @@ import assert from 'node:assert';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getDatabase } from '../backend/db.js';
+
+// Disable Gemini AI API calls during tests to avoid quota exhaustion
+process.env.GEMINI_API_KEY = 'MY_GEMINI_API_KEY';
 import { INITIAL_AUDIT_CHECKLIST } from '../backend/audit/checklist.js';
 import { EvidenceEngine } from '../backend/audit/evidenceEngine.js';
 import { DateEvaluator } from '../backend/audit/dateEvaluator.js';

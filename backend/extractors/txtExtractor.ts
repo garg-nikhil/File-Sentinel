@@ -15,7 +15,8 @@ export class TXTExtractor extends BaseExtractor {
     const structure: Record<string, unknown> = {};
 
     const stats = fs.statSync(filePath);
-    const maxBytes = maxFileSizeMB * 1024 * 1024;
+    const { RESOURCE_LIMITS } = await import('../resourceLimits.js');
+    const maxBytes = Math.min(maxFileSizeMB * 1024 * 1024, RESOURCE_LIMITS.maxTxtSizeBytes);
 
     if (stats.size > maxBytes) {
       warnings.push(`File size (${stats.size} bytes) exceeds configured limit (${maxFileSizeMB} MB)`);
@@ -59,6 +60,12 @@ export class TXTExtractor extends BaseExtractor {
         encoding = 'latin1';
         text = buffer.toString('latin1');
       }
+    }
+
+    if (text.length > RESOURCE_LIMITS.maxExtractedTextBytes) {
+      text = text.substring(0, RESOURCE_LIMITS.maxExtractedTextBytes);
+      warnings.push('RESOURCE_LIMIT_EXCEEDED: Extracted text exceeded maximum allowed limit. Truncated; evidence incomplete.');
+      structure.truncated = true;
     }
 
     const lines = text.split(/\r\n|\r|\n/);

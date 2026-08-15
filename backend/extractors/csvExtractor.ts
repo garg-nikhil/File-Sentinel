@@ -16,7 +16,8 @@ export class CSVExtractor extends BaseExtractor {
     const structure: Record<string, unknown> = {};
 
     const stats = fs.statSync(filePath);
-    const maxBytes = maxFileSizeMB * 1024 * 1024;
+    const { RESOURCE_LIMITS } = await import('../resourceLimits.js');
+    const maxBytes = Math.min(maxFileSizeMB * 1024 * 1024, RESOURCE_LIMITS.maxCsvSizeBytes);
 
     if (stats.size > maxBytes) {
       warnings.push(`File size (${stats.size} bytes) exceeds configured limit (${maxFileSizeMB} MB)`);
@@ -49,6 +50,12 @@ export class CSVExtractor extends BaseExtractor {
       warnings.push(`CSV parse warning: ${err.message || 'Malformed CSV format'}. Falling back to basic line splitting.`);
       const rawLines = fileContent.split(/\r\n|\r|\n/).filter(l => l.trim().length > 0);
       records = rawLines.map(line => line.split(',').map(cell => cell.trim()));
+    }
+
+    if (records.length > RESOURCE_LIMITS.maxCsvRows) {
+      warnings.push(`RESOURCE_LIMIT_EXCEEDED: CSV row count (${records.length}) exceeds maximum allowed limit (${RESOURCE_LIMITS.maxCsvRows}).`);
+      records = records.slice(0, RESOURCE_LIMITS.maxCsvRows);
+      structure.truncated = true;
     }
 
     const rowCount = records.length;
@@ -99,7 +106,12 @@ export class CSVExtractor extends BaseExtractor {
       });
     });
 
-    const fullText = textLines.join('\n');
+    let fullText = textLines.join('\n');
+    if (fullText.length > RESOURCE_LIMITS.maxExtractedTextBytes) {
+      fullText = fullText.substring(0, RESOURCE_LIMITS.maxExtractedTextBytes);
+      warnings.push('RESOURCE_LIMIT_EXCEEDED: Extracted text exceeded maximum allowed limit. Truncated; evidence incomplete.');
+      structure.truncated = true;
+    }
 
     const table: TableData = {
       name: path.basename(filePath),

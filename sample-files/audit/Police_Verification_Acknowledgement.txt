@@ -4,4 +4,4 @@ Employee: John Smith
 Status: APPLIED
 Acknowledgement Slip Number: PV-ACK-2026-8812
 Date of Application: 10/07/2026
-Note: Official clearance report verification pending police department dispatch.
+Note: Official background report verification pending police department dispatch.

@@ -170,5 +170,35 @@ export const api = {
   async getEvidenceGaps(auditId: string) {
     const res = await fetch(`/api/audit/gaps/${auditId}`);
     return res.json();
+  },
+
+  async getCloudUploads() {
+    const res = await fetch('/api/cloud-uploads');
+    return res.json();
+  },
+
+  async uploadSelectedFiles(fileIds: string[]) {
+    const res = await fetch('/api/cloud-uploads/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_ids: fileIds })
+    });
+    return res.json();
+  },
+
+  async uploadAllFiles(scanId?: string) {
+    const res = await fetch('/api/cloud-uploads/upload-all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scan_id: scanId })
+    });
+    return res.json();
+  },
+
+  async retryCloudUpload(fileId: string) {
+    const res = await fetch(`/api/cloud-uploads/retry/${fileId}`, {
+      method: 'POST'
+    });
+    return res.json();
   }
 };

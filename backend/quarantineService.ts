@@ -113,6 +113,7 @@ export class LocalCloudStorageProvider implements CloudStorageProvider {
     try {
       if (!fs.existsSync(localPath)) return false;
       const targetPath = path.join(this.bucketPath, cloudObjectName);
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
       fs.copyFileSync(localPath, targetPath);
       return fs.existsSync(targetPath);
     } catch (e) {

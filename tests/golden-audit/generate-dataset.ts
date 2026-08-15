@@ -370,7 +370,7 @@ export async function generateGoldenDataset(targetDir: string = './tests/golden-
     'Expired_Insurance_Policy_Sample.pdf',
     buildPdfBuffer([
       'SYNTHETIC TEST DATA - FILESENTINEL GOLDEN DATASET',
-      'COMMERCIAL GENERAL LIABILITY INSURANCE POLICY (HISTORICAL EXPIRED)',
+      'COMMERCIAL GENERAL LIABILITY INSURANCE POLICY - HISTORICAL EXPIRED',
       'Policy Number: CGL-HIST-2025-01',
       'Insured Organization: Sentinel Recovery & Telecalling Services Pvt Ltd',
       'Insurance Provider: Apex Indemnity Mutual',

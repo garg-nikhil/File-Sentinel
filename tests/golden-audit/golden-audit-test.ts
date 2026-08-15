@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert';
 import { getDatabase } from '../../backend/db.js';
+
+// Disable Gemini AI API calls during tests to avoid quota exhaustion
+process.env.GEMINI_API_KEY = 'MY_GEMINI_API_KEY';
 import { defaultRegistry } from '../../backend/extractors/registry.js';
 import { EvidenceEngine } from '../../backend/audit/evidenceEngine.js';
 import { EvidenceMatcher } from '../../backend/audit/evidenceMatcher.js';
@@ -234,7 +237,7 @@ async function runGoldenAuditTestSuite() {
 
   // Verify Conflict Case: Jane Synthetic associated with AG-GOLD-001
   assert.ok(session.entity_conflicts && session.entity_conflicts.length > 0, 'Entity conflict must be detected');
-  const idConflict = session.entity_conflicts.find(c => c.conflictType === 'MULTIPLE_NAMES_FOR_IDENTIFIER' || c.conflictType === 'AGENT_ID_NAME_MISMATCH');
+  const idConflict = session.entity_conflicts.find(c => c.conflictType === 'POSSIBLE_ENTITY_MISMATCH' || c.conflictType === 'AGENT_ID_NAME_MISMATCH');
   assert.ok(idConflict, 'Agent ID / Name mismatch conflict must be present for AG-GOLD-001');
   console.log(`  ✔ Successfully resolved entities and detected entity conflict: ${idConflict.title} (${idConflict.reason})`);
 

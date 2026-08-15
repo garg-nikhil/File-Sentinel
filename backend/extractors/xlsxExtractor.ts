@@ -30,7 +30,8 @@ export class XLSXExtractor extends BaseExtractor {
           size: stats.size,
           created: stats.birthtime,
           modified: stats.mtime,
-          skipped: true
+          skipped: true,
+          error: true
         },
         links,
         embeddedObjects,
@@ -40,6 +41,29 @@ export class XLSXExtractor extends BaseExtractor {
     }
 
     const fileBuffer = fs.readFileSync(filePath);
+
+    // --- ARCHIVE BOMB & ZIP INSPECTION ---
+    const { inspectZipArchive, RESOURCE_LIMITS } = await import('../resourceLimits.js');
+    const zipCheck = await inspectZipArchive(fileBuffer);
+    if (!zipCheck.valid) {
+      warnings.push(zipCheck.reason || 'RESOURCE_LIMIT_EXCEEDED: Archive inspection failed.');
+      return {
+        text: '',
+        metadata: {
+          extension: '.xlsx',
+          size: stats.size,
+          created: stats.birthtime,
+          modified: stats.mtime,
+          error: true,
+          resourceLimitExceeded: true
+        },
+        links,
+        embeddedObjects,
+        structure,
+        warnings
+      };
+    }
+
     let wb: XLSX.WorkBook;
 
     try {
@@ -228,7 +252,12 @@ export class XLSXExtractor extends BaseExtractor {
       }
     }
 
-    const fullText = textParts.join('\n');
+    let fullText = textParts.join('\n');
+    if (fullText.length > RESOURCE_LIMITS.maxExtractedTextBytes) {
+      fullText = fullText.substring(0, RESOURCE_LIMITS.maxExtractedTextBytes);
+      warnings.push('RESOURCE_LIMIT_EXCEEDED: Extracted text exceeded maximum allowed limit. Truncated; evidence incomplete.');
+      structure.truncated = true;
+    }
 
     return {
       text: fullText,

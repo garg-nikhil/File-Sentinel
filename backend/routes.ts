@@ -12,6 +12,7 @@ import { EvidenceEngine } from './audit/evidenceEngine.js';
 import { AuditReportGenerator } from './audit/auditReport.js';
 import { INITIAL_AUDIT_CHECKLIST } from './audit/checklist.js';
 import { AuditScoringEngine } from './audit/scoring.js';
+import { isValidFileId } from './securityMiddleware.js';
 
 export function createApiRouter() {
   const router = express.Router();
@@ -74,8 +75,20 @@ export function createApiRouter() {
     const { root_path } = req.body;
     const targetPath = root_path || path.resolve('./sample-files');
 
-    if (!fs.existsSync(targetPath)) {
-      return res.status(400).json({ error: `Directory target does not exist: ${targetPath}` });
+    try {
+      if (!fs.existsSync(targetPath)) {
+        return res.status(400).json({ error: `Directory target does not exist: ${targetPath}` });
+      }
+      const realTarget = fs.realpathSync(targetPath);
+      const baseAllowed = process.env.BASE_ALLOWED_DIR ? fs.realpathSync(process.env.BASE_ALLOWED_DIR) : null;
+      if (baseAllowed) {
+        const rel = path.relative(baseAllowed, realTarget);
+        if (rel === '..' || rel.startsWith('..' + path.sep) || rel.startsWith('../') || rel.startsWith('..\\') || path.isAbsolute(rel)) {
+          return res.status(403).json({ error: `Access denied: Requested path is outside allowed directory.` });
+        }
+      }
+    } catch (e: any) {
+      return res.status(400).json({ error: `Directory target cannot be resolved: ${targetPath}` });
     }
 
     // Fetch active rules from DB
@@ -799,6 +812,199 @@ export function createApiRouter() {
         res.setHeader('Content-Type', 'text/html');
         return res.send(AuditReportGenerator.generateHtml(session as any));
       }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // --- PHASE 6A: CLOUD UPLOAD ONLY / NON-DESTRUCTIVE QUARANTINE ---
+  router.get('/cloud-uploads', (req: Request, res: Response) => {
+    try {
+      const rows = db.prepare('SELECT * FROM file_cloud_uploads').all();
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  async function processFileUpload(fileId: string): Promise<any> {
+    const fileRow = db.prepare('SELECT * FROM files WHERE file_id = ?').get(fileId) as any;
+    if (!fileRow) {
+      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: 'File not found' };
+    }
+
+    const localPath = fileRow.path;
+    const sha256 = fileRow.sha256;
+    const bucketName = process.env.GOOGLE_CLOUD_BUCKET || 'filesentinel-quarantine-bucket';
+    const sanitizedFilename = path.basename(localPath).replace(/[^a-zA-Z0-9_.-]/g, '_');
+    const cloudObjectName = `filesentinel/${fileRow.scan_id || 'general'}/${fileId}/${sanitizedFilename}`;
+
+    const existingUpload = db.prepare('SELECT * FROM file_cloud_uploads WHERE file_id = ?').get(fileId) as any;
+    if (existingUpload && existingUpload.upload_status === 'UPLOADED') {
+      const verified = await cloudStorage.verify(cloudObjectName, sha256);
+      if (verified) {
+        return {
+          file_id: fileId,
+          filename: fileRow.filename,
+          success: true,
+          status: 'ALREADY_UPLOADED',
+          cloud_object_name: cloudObjectName,
+          sha256,
+          local_file_retained: fs.existsSync(localPath)
+        };
+      }
+    }
+
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO file_cloud_uploads (file_id, scan_id, audit_session_id, original_filename, local_path, sha256, size, cloud_bucket, cloud_object_name, upload_status, uploaded_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'UPLOADING', ?)
+      ON CONFLICT(file_id) DO UPDATE SET upload_status = 'UPLOADING', uploaded_at = ?
+    `).run(fileId, fileRow.scan_id, null, fileRow.filename, localPath, sha256, fileRow.size, bucketName, cloudObjectName, now, now);
+
+    logAuditEvent('UPLOAD_STARTED', localPath, sha256, 'SUCCESS', `Started upload for ${fileRow.filename}`);
+
+    if (!fs.existsSync(localPath)) {
+      const errMsg = 'Local file missing before upload';
+      db.prepare(`UPDATE file_cloud_uploads SET upload_status = 'UPLOAD_FAILED', error_message = ? WHERE file_id = ?`).run(errMsg, fileId);
+      logAuditEvent('UPLOAD_FAILED', localPath, sha256, 'ERROR', errMsg);
+      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: errMsg };
+    }
+
+    const currentHash = scannerEngine.calculateSHA256(localPath);
+    if (currentHash !== sha256) {
+      const errMsg = 'SHA-256 checksum mismatch';
+      db.prepare(`UPDATE file_cloud_uploads SET upload_status = 'UPLOAD_FAILED', error_message = ? WHERE file_id = ?`).run(errMsg, fileId);
+      logAuditEvent('UPLOAD_FAILED', localPath, sha256, 'ERROR', errMsg);
+      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: errMsg };
+    }
+
+    const uploadSuccess = await cloudStorage.upload(localPath, cloudObjectName);
+    if (!uploadSuccess) {
+      const errMsg = 'Cloud storage upload failed';
+      db.prepare(`UPDATE file_cloud_uploads SET upload_status = 'UPLOAD_FAILED', error_message = ? WHERE file_id = ?`).run(errMsg, fileId);
+      logAuditEvent('UPLOAD_FAILED', localPath, sha256, 'ERROR', errMsg);
+      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: errMsg, local_file_retained: fs.existsSync(localPath) };
+    }
+
+    logAuditEvent('UPLOAD_SUCCESS', localPath, sha256, 'SUCCESS', `Uploaded to ${cloudObjectName}`);
+
+    const verified = await cloudStorage.verify(cloudObjectName, sha256);
+    if (!verified) {
+      const errMsg = 'Cloud verification failed or hash mismatch';
+      db.prepare(`UPDATE file_cloud_uploads SET upload_status = 'VERIFICATION_FAILED', error_message = ? WHERE file_id = ?`).run(errMsg, fileId);
+      logAuditEvent('UPLOAD_VERIFICATION_FAILED', localPath, sha256, 'ERROR', errMsg);
+      return { file_id: fileId, success: false, status: 'VERIFICATION_FAILED', error: errMsg, local_file_retained: fs.existsSync(localPath) };
+    }
+
+    const verifiedAt = new Date().toISOString();
+    db.prepare(`
+      UPDATE file_cloud_uploads
+      SET upload_status = 'UPLOADED', verified_at = ?, error_message = NULL
+      WHERE file_id = ?
+    `).run(verifiedAt, fileId);
+
+    logAuditEvent('UPLOAD_VERIFICATION_SUCCESS', localPath, sha256, 'SUCCESS', `Verified remote object ${cloudObjectName}`);
+
+    const localFileExists = fs.existsSync(localPath);
+
+    return {
+      file_id: fileId,
+      filename: fileRow.filename,
+      success: true,
+      status: 'UPLOADED',
+      cloud_object_name: cloudObjectName,
+      sha256,
+      local_file_retained: localFileExists
+    };
+  }
+
+  router.post('/cloud-uploads/upload', async (req: Request, res: Response) => {
+    try {
+      const { file_ids } = req.body;
+      if (!Array.isArray(file_ids) || file_ids.length === 0) {
+        return res.status(400).json({ error: 'file_ids array is required' });
+      }
+
+      if (file_ids.length > 500) {
+        return res.status(400).json({ error: 'Batch size exceeds maximum allowed limit (500 files).' });
+      }
+
+      for (const fileId of file_ids) {
+        if (!isValidFileId(fileId)) {
+          return res.status(400).json({ error: `Invalid file ID format or security violation: ${fileId}` });
+        }
+      }
+
+      const results: any[] = [];
+      for (const fileId of file_ids) {
+        const resItem = await processFileUpload(fileId);
+        results.push(resItem);
+      }
+
+      const successCount = results.filter(r => r.success || r.status === 'ALREADY_UPLOADED').length;
+      const failedCount = results.length - successCount;
+
+      res.json({
+        success: failedCount === 0,
+        total_selected: results.length,
+        success_count: successCount,
+        failed_count: failedCount,
+        results
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/cloud-uploads/upload-all', async (req: Request, res: Response) => {
+    try {
+      const { scan_id } = req.body;
+      let query = 'SELECT file_id FROM files';
+      const params: any[] = [];
+      if (scan_id) {
+        if (typeof scan_id !== 'string' || scan_id.length > 64) {
+          return res.status(400).json({ error: 'Invalid scan_id parameter' });
+        }
+        query += ' WHERE scan_id = ?';
+        params.push(scan_id);
+      }
+      const fileRows = db.prepare(query).all(...params) as any[];
+      const fileIds = fileRows.map(r => r.file_id);
+
+      if (fileIds.length > 5000) {
+        return res.status(400).json({ error: 'Upload-all batch limit exceeded (max 5000 files).' });
+      }
+
+      const results: any[] = [];
+      for (const fileId of fileIds) {
+        const resItem = await processFileUpload(fileId);
+        results.push(resItem);
+      }
+
+      const successCount = results.filter(r => r.success || r.status === 'ALREADY_UPLOADED').length;
+      const failedCount = results.length - successCount;
+
+      res.json({
+        success: failedCount === 0,
+        total_scanned: results.length,
+        success_count: successCount,
+        failed_count: failedCount,
+        results
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/cloud-uploads/retry/:file_id', async (req: Request, res: Response) => {
+    try {
+      const { file_id } = req.params;
+      if (!isValidFileId(file_id)) {
+        return res.status(400).json({ error: 'Invalid file ID format or security violation.' });
+      }
+      const result = await processFileUpload(file_id);
+      res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
