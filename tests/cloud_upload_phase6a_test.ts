@@ -81,7 +81,7 @@ async function processFileUploadTest(fileId: string): Promise<any> {
 
   const existingUpload = db.prepare('SELECT * FROM file_cloud_uploads WHERE file_id = ?').get(fileId) as any;
   if (existingUpload && existingUpload.upload_status === 'UPLOADED') {
-    const verified = await storageProvider.verify(cloudObjectName, sha256);
+    const verified = await storageProvider.verify(cloudObjectName, sha256, fileRow.size);
     if (verified) {
       return {
         file_id: fileId,
@@ -129,7 +129,7 @@ async function processFileUploadTest(fileId: string): Promise<any> {
 
   logAuditEvent('UPLOAD_SUCCESS', localPath, sha256, 'SUCCESS', `Uploaded to ${cloudObjectName}`);
 
-  const verified = await storageProvider.verify(cloudObjectName, sha256);
+  const verified = await storageProvider.verify(cloudObjectName, sha256, fileRow.size);
   if (!verified) {
     const errMsg = 'Cloud verification failed or hash mismatch';
     db.prepare(`UPDATE file_cloud_uploads SET upload_status = 'VERIFICATION_FAILED', error_message = ? WHERE file_id = ?`).run(errMsg, fileId);
@@ -177,17 +177,17 @@ async function runTests() {
   db.prepare(`
     INSERT INTO files (file_id, scan_id, path, filename, extension, size, sha256, classification, risk_score, scanned_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('f1', 'scan_01', file1Path, 'sample_confidential.txt', '.txt', 30, f1Hash, 'CONFIDENTIAL', 75, new Date().toISOString());
+  `).run('f1', 'scan_01', file1Path, 'sample_confidential.txt', '.txt', fs.statSync(file1Path).size, f1Hash, 'CONFIDENTIAL', 75, new Date().toISOString());
 
   db.prepare(`
     INSERT INTO files (file_id, scan_id, path, filename, extension, size, sha256, classification, risk_score, scanned_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('f2', 'scan_01', file2Path, 'sample_restricted..txt../../traversal.txt', '.txt', 30, f2Hash, 'RESTRICTED', 95, new Date().toISOString());
+  `).run('f2', 'scan_01', file2Path, 'sample_restricted..txt../../traversal.txt', '.txt', fs.statSync(file2Path).size, f2Hash, 'RESTRICTED', 95, new Date().toISOString());
 
   db.prepare(`
     INSERT INTO files (file_id, scan_id, path, filename, extension, size, sha256, classification, risk_score, scanned_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('f3', 'scan_01', file3Path, 'sample_normal.txt', '.txt', 20, f3Hash, 'PUBLIC', 5, new Date().toISOString());
+  `).run('f3', 'scan_01', file3Path, 'sample_normal.txt', '.txt', fs.statSync(file3Path).size, f3Hash, 'PUBLIC', 5, new Date().toISOString());
 
   console.log('--- TEST 1: Upload one file (success, hash verified, local file retained) ---');
   const res1 = await processFileUploadTest('f1');
@@ -224,7 +224,7 @@ async function runTests() {
   db.prepare(`
     INSERT INTO files (file_id, scan_id, path, filename, extension, size, sha256, classification, risk_score, scanned_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run('ret_1', 'scan_02', tempTestFile, 'retention_check.txt', '.txt', 22, tempHash, 'INTERNAL', 40, new Date().toISOString());
+  `).run('ret_1', 'scan_02', tempTestFile, 'retention_check.txt', '.txt', fs.statSync(tempTestFile).size, tempHash, 'INTERNAL', 40, new Date().toISOString());
 
   const uploadRetRes = await processFileUploadTest('ret_1');
   if (!uploadRetRes.success) {

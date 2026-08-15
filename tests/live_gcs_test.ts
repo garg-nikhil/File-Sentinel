@@ -27,7 +27,11 @@ async function runLiveTest() {
       throw new Error('Live GCS upload returned false');
     }
 
-    const exists = await provider.verify(cloudObjectName, '');
+    const crypto = await import('node:crypto');
+    const buf = fs.readFileSync(testFilePath);
+    const sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    const size = fs.statSync(testFilePath).size;
+    const exists = await provider.verify(cloudObjectName, sha256, size);
     if (!exists) {
       throw new Error('Live GCS verification failed');
     }

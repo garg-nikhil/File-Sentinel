@@ -725,7 +725,7 @@ export function createApiRouter() {
 
     const existingUpload = db.prepare('SELECT * FROM file_cloud_uploads WHERE file_id = ?').get(fileId) as any;
     if (existingUpload && existingUpload.upload_status === 'UPLOADED') {
-      const verified = await cloudStorage.verify(cloudObjectName, sha256);
+      const verified = await cloudStorage.verify(cloudObjectName, sha256, fileRow.size);
       if (verified) {
         return {
           file_id: fileId,
@@ -773,7 +773,7 @@ export function createApiRouter() {
 
     logAuditEvent('UPLOAD_SUCCESS', localPath, sha256, 'SUCCESS', `Uploaded to ${cloudObjectName}`);
 
-    const verified = await cloudStorage.verify(cloudObjectName, sha256);
+    const verified = await cloudStorage.verify(cloudObjectName, sha256, fileRow.size);
     if (!verified) {
       const errMsg = 'Cloud verification failed or hash mismatch';
       db.prepare(`UPDATE file_cloud_uploads SET upload_status = 'VERIFICATION_FAILED', error_message = ? WHERE file_id = ?`).run(errMsg, fileId);

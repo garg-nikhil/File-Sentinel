@@ -4,7 +4,7 @@ import { Storage } from '@google-cloud/storage';
 
 export interface CloudStorageProvider {
   upload(localPath: string, cloudObjectName: string): Promise<boolean>;
-  verify(cloudObjectName: string, expectedSHA256: string): Promise<boolean>;
+  verify(cloudObjectName: string, expectedSHA256: string, expectedSize: number): Promise<boolean>;
   deleteRemote(cloudObjectName: string): Promise<boolean>;
   getMetadata(cloudObjectName: string): Promise<{ exists: boolean; sha256?: string; size?: number } | null>;
 }
@@ -51,13 +51,13 @@ export class GoogleCloudStorageProvider implements CloudStorageProvider {
     }
   }
 
-  async verify(cloudObjectName: string, expectedSHA256: string): Promise<boolean> {
+  async verify(cloudObjectName: string, expectedSHA256: string, expectedSize: number): Promise<boolean> {
     try {
       const meta = await this.getMetadata(cloudObjectName);
       if (!meta || !meta.exists) return false;
       if (!meta.sha256) return false; // Missing SHA-256 metadata MUST result in failure
       if (meta.sha256 !== expectedSHA256) return false;
-      if (meta.size === undefined || meta.size <= 0) return false;
+      if (meta.size === undefined || meta.size <= 0 || meta.size !== expectedSize) return false;
       return true;
     } catch {
       return false;
@@ -123,13 +123,13 @@ export class LocalCloudStorageProvider implements CloudStorageProvider {
     }
   }
 
-  async verify(cloudObjectName: string, expectedSHA256: string): Promise<boolean> {
+  async verify(cloudObjectName: string, expectedSHA256: string, expectedSize: number): Promise<boolean> {
     try {
       const meta = await this.getMetadata(cloudObjectName);
       if (!meta || !meta.exists) return false;
       if (!meta.sha256) return false;
       if (meta.sha256 !== expectedSHA256) return false;
-      if (meta.size === undefined || meta.size <= 0) return false;
+      if (meta.size === undefined || meta.size <= 0 || meta.size !== expectedSize) return false;
       return true;
     } catch {
       return false;

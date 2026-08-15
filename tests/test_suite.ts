@@ -142,7 +142,8 @@ async function runTestSuite() {
   const okUploader = new LocalCloudStorageProvider('test_bucket');
   const cloudObj = `${hash}_test_quarantine_target.txt`;
   await okUploader.upload(tempTarget, cloudObj);
-  await okUploader.verify(cloudObj, hash);
+  const fileSize = fs.statSync(tempTarget).size;
+  await okUploader.verify(cloudObj, hash, fileSize);
   fs.unlinkSync(tempTarget);
   assert(fs.existsSync(tempTarget) === false, 'Local file deleted ONLY after verified upload');
   console.log(' ✓ Strict cloud upload & verified local deletion contract verified.\n');
