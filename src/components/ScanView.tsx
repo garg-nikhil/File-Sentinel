@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ScanSession } from '../types';
 import { api } from '../services/api';
-import { FolderSearch, Play, CheckCircle2, AlertTriangle, ShieldCheck, FileCode } from 'lucide-react';
+import { FolderSearch, Play, CheckCircle2, AlertTriangle, ShieldCheck, FileCode, UploadCloud } from 'lucide-react';
 
 interface ScanViewProps {
   onScanComplete: (scanId: string) => void;
@@ -16,7 +16,11 @@ export const ScanView: React.FC<ScanViewProps> = ({
 }) => {
   const [folderPath, setFolderPath] = useState('./sample-files');
   const [isScanning, setIsScanning] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const presets = [
     { label: 'All Sample Datasets', path: './sample-files' },
@@ -48,15 +52,42 @@ export const ScanView: React.FC<ScanViewProps> = ({
     return () => clearInterval(timer);
   }, [activeScan?.scan_id, activeScan?.status]);
 
-  const handleStartScan = async () => {
+  const handleStartScan = async (pathOverride?: string) => {
     try {
       setErrorMsg(null);
       setIsScanning(true);
-      const session = await api.startScan(folderPath);
+      const target = pathOverride || folderPath;
+      const session = await api.startScan(target);
       setActiveScan(session);
     } catch (err: any) {
       setIsScanning(false);
       setErrorMsg(err.message || 'Failed to initialize scan engine');
+    }
+  };
+
+  const handleDirectorySelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    
+    try {
+      setIsUploading(true);
+      setErrorMsg(null);
+      setUploadProgress(0);
+      
+      const files = Array.from(e.target.files) as File[];
+      const uploadedPath = await api.uploadDirectory(files, (pct) => {
+        setUploadProgress(pct);
+      });
+      
+      setFolderPath(uploadedPath);
+      setIsUploading(false);
+      setUploadProgress(0);
+      
+      // Optionally start scan automatically
+      // handleStartScan(uploadedPath);
+    } catch (err: any) {
+      setIsUploading(false);
+      setUploadProgress(0);
+      setErrorMsg(err.message || 'Failed to upload directory');
     }
   };
 
@@ -79,28 +110,63 @@ export const ScanView: React.FC<ScanViewProps> = ({
       {/* Target Directory Selection Box */}
       <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
         <div>
-          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">
-            Target Directory Path
-          </label>
+          <div className="flex justify-between items-center mb-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300">
+              Target Directory Path
+            </label>
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isScanning || isUploading}
+              className="text-xs text-emerald-400 hover:text-emerald-300 flex items-center gap-1 font-medium transition-colors"
+            >
+              <UploadCloud className="w-3.5 h-3.5" />
+              Upload Local Folder
+            </button>
+            {/* hidden directory input */}
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleDirectorySelect}
+              className="hidden" 
+              // @ts-ignore
+              webkitdirectory="" 
+              directory="" 
+              multiple 
+            />
+          </div>
           <div className="flex gap-3">
             <input
               type="text"
               value={folderPath}
               onChange={e => setFolderPath(e.target.value)}
-              placeholder="e.g. ./sample-files or C:\Users\Documents"
-              disabled={isScanning}
+              placeholder="e.g. ./sample-files or uploaded path"
+              disabled={isScanning || isUploading}
               className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
             />
             <button
               id="btn-execute-scan"
-              onClick={handleStartScan}
-              disabled={isScanning || !folderPath.trim()}
-              className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-6 py-2.5 rounded-lg flex items-center gap-2 text-sm transition-colors disabled:opacity-50 shadow-md"
+              onClick={() => handleStartScan()}
+              disabled={isScanning || isUploading || !folderPath.trim()}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-6 py-2.5 rounded-lg flex items-center gap-2 text-sm transition-colors disabled:opacity-50 shadow-md whitespace-nowrap"
             >
               <Play className="w-4 h-4 fill-current" />
               {isScanning ? 'Scanning...' : 'Start Scan'}
             </button>
           </div>
+          {isUploading && (
+            <div className="mt-3">
+              <div className="flex justify-between text-xs text-slate-400 mb-1">
+                <span>Uploading local folder...</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="h-1 bg-slate-800 rounded-full overflow-hidden">
+                <div 
+                  className="h-full bg-emerald-500 transition-all duration-300"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
           {errorMsg && <p className="text-xs text-red-400 mt-2">{errorMsg}</p>}
         </div>
 

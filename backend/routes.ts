@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import multer from 'multer';
 import { getDatabase } from './db.js';
 import { FileScannerEngine } from './scannerEngine.js';
 import { getCloudStorageProvider } from './quarantineService.js';
@@ -13,6 +14,21 @@ import { AuditReportGenerator } from './audit/auditReport.js';
 import { INITIAL_AUDIT_CHECKLIST } from './audit/checklist.js';
 import { AuditScoringEngine } from './audit/scoring.js';
 import { isValidFileId } from './securityMiddleware.js';
+
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    // Preserve relative directory structure if passed via originalname
+    const relativePath = path.dirname(file.originalname);
+    const uploadId = req.body.uploadId || 'default';
+    const targetDir = path.join('backend', 'uploads', uploadId, relativePath);
+    fs.mkdirSync(targetDir, { recursive: true });
+    cb(null, targetDir);
+  },
+  filename: function (req, file, cb) {
+    cb(null, path.basename(file.originalname));
+  }
+});
+const uploadLocalScan = multer({ storage });
 
 export function createApiRouter() {
   const router = express.Router();
@@ -71,6 +87,15 @@ export function createApiRouter() {
   });
 
   // --- SCANS ---
+  router.post('/scans/upload-target', uploadLocalScan.array('files'), (req: Request, res: Response) => {
+    const uploadId = req.body.uploadId;
+    if (!uploadId) {
+      return res.status(400).json({ error: 'Missing uploadId' });
+    }
+    const uploadedPath = path.resolve(path.join('backend', 'uploads', uploadId));
+    res.json({ success: true, root_path: uploadedPath });
+  });
+
   router.post('/scans', async (req: Request, res: Response) => {
     const { root_path } = req.body;
     const targetPath = root_path || path.resolve('./sample-files');

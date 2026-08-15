@@ -39,7 +39,51 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ root_path: rootPath })
     });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to start scan');
+    }
     return res.json();
+  },
+
+  async uploadDirectory(files: File[], onProgress?: (pct: number) => void): Promise<string> {
+    const formData = new FormData();
+    const uploadId = 'scan_' + Math.random().toString(36).substring(2, 10);
+    formData.append('uploadId', uploadId);
+    
+    for (const file of files) {
+      // Use webkitRelativePath if available, fallback to file.name
+      const relativePath = (file as any).webkitRelativePath || file.name;
+      formData.append('files', file, relativePath);
+    }
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/scans/upload-target');
+      
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          const res = JSON.parse(xhr.responseText);
+          resolve(res.root_path);
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.error || 'Upload failed'));
+          } catch {
+            reject(new Error('Upload failed'));
+          }
+        }
+      };
+      
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.send(formData);
+    });
   },
 
   async getScanProgress(scanId: string): Promise<ScanSession> {
