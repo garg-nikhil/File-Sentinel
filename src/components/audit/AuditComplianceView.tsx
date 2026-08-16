@@ -28,16 +28,17 @@ import {
 import { api } from '../../services/api';
 import { AuditDetailDrawer } from './AuditDetailDrawer';
 
-export const AuditComplianceView: React.FC = () => {
+export const AuditComplianceView: React.FC<{ recentScanId?: string | null }> = ({ recentScanId }) => {
   const [sessions, setSessions] = useState<any[]>([]);
   const [activeSession, setActiveSession] = useState<any | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [scanning, setScanning] = useState<boolean>(false);
+  const [auditErrorForScan, setAuditErrorForScan] = useState<string | null>(null);
 
   // Run form controls
-  const [auditDate, setAuditDate] = useState<string>('2026-08-12');
-  const [agencyName, setAgencyName] = useState<string>('Zenith Telecalling & Collection Agency');
-  const [targetDir, setTargetDir] = useState<string>('./sample-files/audit');
+  const [auditDate, setAuditDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [agencyName, setAgencyName] = useState<string>('');
+  const [targetDir, setTargetDir] = useState<string>('');
 
   // Filters & Tabs
   const [activeTab, setActiveTab] = useState<'checklist' | 'categories' | 'gaps' | 'entities' | 'history'>('checklist');
@@ -51,21 +52,57 @@ export const AuditComplianceView: React.FC = () => {
 
   useEffect(() => {
     loadAuditSessions();
-  }, []);
+  }, [recentScanId]);
 
   const loadAuditSessions = async () => {
     setLoading(true);
+    setAuditErrorForScan(null);
     try {
       const data = await api.getAuditSessions();
       setSessions(data || []);
-      if (data && data.length > 0) {
+      
+      let targetSession = null;
+      if (recentScanId) {
+        targetSession = data?.find(s => s.scan_id === recentScanId);
+      }
+      
+      if (targetSession) {
+        loadSessionDetail(targetSession.audit_id);
+      } else if (recentScanId) {
+        setAuditErrorForScan(recentScanId);
+      } else if (data && data.length > 0) {
         // Load the latest session by default
         loadSessionDetail(data[0].audit_id);
+      } else {
+        setActiveSession(null);
       }
     } catch (err) {
       console.error('Failed loading audit sessions:', err);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const retryAudit = async () => {
+    if (!auditErrorForScan) return;
+    setScanning(true);
+    try {
+      const session = await api.runAuditScan({
+        scan_id: auditErrorForScan,
+        audit_date: auditDate || new Date().toISOString().split('T')[0],
+        agency_name: agencyName.trim() || 'Telecalling & Collection Agency',
+        auditor_name: 'Automated Compliance Inspector'
+      });
+      setAuditErrorForScan(null);
+      await loadAuditSessions();
+      if (session && session.audit_id) {
+        await loadSessionDetail(session.audit_id);
+      }
+    } catch (err: any) {
+      console.error('Retry failed:', err);
+      alert(`Failed to retry audit evaluation: ${err.message || 'Error'}`);
+    } finally {
+      setScanning(false);
     }
   };
 
@@ -81,12 +118,18 @@ export const AuditComplianceView: React.FC = () => {
   };
 
   const handleRunAuditScan = async () => {
+    if (!targetDir.trim() && !recentScanId) {
+      alert('Please enter a target directory path or run a file scan first.');
+      return;
+    }
     setScanning(true);
+    setAuditErrorForScan(null);
     try {
       const newSession = await api.runAuditScan({
-        target_dir: targetDir,
-        audit_date: auditDate,
-        agency_name: agencyName,
+        target_dir: targetDir.trim() || undefined,
+        scan_id: recentScanId || undefined,
+        audit_date: auditDate || new Date().toISOString().split('T')[0],
+        agency_name: agencyName.trim() || 'Telecalling & Collection Agency',
         auditor_name: 'Automated Compliance Engine'
       });
       await loadAuditSessions();
@@ -192,6 +235,28 @@ export const AuditComplianceView: React.FC = () => {
         )}
       </div>
 
+      {auditErrorForScan && !activeSession && (
+        <div className="p-4 bg-red-950/40 border border-red-500/30 rounded-xl space-y-3">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-red-400 mt-0.5" />
+            <div>
+              <h3 className="text-red-400 font-bold text-sm">Audit Evaluation Failed</h3>
+              <p className="text-slate-300 text-xs mt-1">
+                Scan completed, but audit evaluation encountered an error. 
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={retryAudit}
+            disabled={scanning}
+            className="bg-red-500/20 hover:bg-red-500/30 text-red-300 border border-red-500/50 text-xs font-bold px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
+          >
+            {scanning ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            {scanning ? 'Retrying...' : 'Retry Audit Evaluation'}
+          </button>
+        </div>
+      )}
+
       {/* Audit Configuration / Run Bar */}
       <div className="p-4 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs">
@@ -215,7 +280,7 @@ export const AuditComplianceView: React.FC = () => {
               type="text"
               value={agencyName}
               onChange={e => setAgencyName(e.target.value)}
-              placeholder="Agency Name"
+              placeholder="e.g. Collection & Telecalling Agency"
               className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
             />
           </div>
@@ -226,7 +291,7 @@ export const AuditComplianceView: React.FC = () => {
               type="text"
               value={targetDir}
               onChange={e => setTargetDir(e.target.value)}
-              placeholder="./sample-files/audit"
+              placeholder="e.g. /path/to/evidence/folder"
               className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
             />
           </div>
@@ -234,7 +299,7 @@ export const AuditComplianceView: React.FC = () => {
           <div className="flex items-end">
             <button
               onClick={handleRunAuditScan}
-              disabled={scanning}
+              disabled={scanning || (!targetDir.trim() && !recentScanId)}
               className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg transition-colors shadow flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {scanning ? (
@@ -508,45 +573,51 @@ export const AuditComplianceView: React.FC = () => {
       )}
 
       {/* TAB 2: CATEGORY SCORES */}
-      {activeTab === 'categories' && activeSession && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {Object.entries(activeSession.category_scores || {}).map(([key, cat]: [string, any]) => (
-            <div key={key} className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm flex flex-col justify-between space-y-4">
-              <div>
-                <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
-                  {key === 'ZERO_TOLERANCE' ? 'Category 1' : key === 'GOVERNANCE_COMPLIANCE_INFOSEC' ? 'Category 2' : 'Category 3'}
-                </span>
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">
-                  {key === 'ZERO_TOLERANCE' ? 'Regulatory and Operational Integrity' : key === 'GOVERNANCE_COMPLIANCE_INFOSEC' ? 'Governance, Compliance & INFOSEC' : 'Infrastructure & Process Management'}
-                </h3>
-              </div>
-
-              <div>
-                <div className="flex justify-between items-baseline mb-2">
-                  <span className="text-2xl font-black text-slate-900 dark:text-slate-100">
-                    {cat.earned} <span className="text-sm font-normal text-slate-400">/ {cat.max} pts</span>
+      {activeTab === 'categories' && (
+        !activeSession ? (
+          <div className="p-8 text-center bg-white dark:bg-slate-900 rounded-2xl border border-dashed border-slate-300 dark:border-slate-700 text-slate-400 text-xs">
+            No active audit session loaded. Run an audit compliance scan to view category scores.
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {Object.entries(activeSession.category_scores || {}).map(([key, cat]: [string, any]) => (
+              <div key={key} className="p-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-sm flex flex-col justify-between space-y-4">
+                <div>
+                  <span className="text-xs font-extrabold text-slate-400 uppercase tracking-wider">
+                    {key === 'ZERO_TOLERANCE' ? 'Category 1' : key === 'GOVERNANCE_COMPLIANCE_INFOSEC' ? 'Category 2' : 'Category 3'}
                   </span>
-                  <span className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${
-                    cat.status === 'PASS' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
-                  }`}>
-                    {cat.status}
-                  </span>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100 mt-1">
+                    {key === 'ZERO_TOLERANCE' ? 'Regulatory and Operational Integrity' : key === 'GOVERNANCE_COMPLIANCE_INFOSEC' ? 'Governance, Compliance & INFOSEC' : 'Infrastructure & Process Management'}
+                  </h3>
                 </div>
 
-                <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-indigo-600 transition-all duration-500"
-                    style={{ width: `${Math.min(100, (cat.earned / cat.max) * 100)}%` }}
-                  />
+                <div>
+                  <div className="flex justify-between items-baseline mb-2">
+                    <span className="text-2xl font-black text-slate-900 dark:text-slate-100">
+                      {cat.earned} <span className="text-sm font-normal text-slate-400">/ {cat.max} pts</span>
+                    </span>
+                    <span className={`px-2.5 py-0.5 text-xs font-bold rounded-full ${
+                      cat.status === 'PASS' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
+                    }`}>
+                      {cat.status}
+                    </span>
+                  </div>
+
+                  <div className="w-full h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-600 transition-all duration-500"
+                      style={{ width: `${Math.min(100, (cat.earned / cat.max) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+
+                <div className="text-xs text-slate-500 pt-2 border-t border-slate-100 dark:border-slate-800">
+                  Fatal Requirements: {key === 'ZERO_TOLERANCE' ? 'YES (Critical)' : 'NO'}
                 </div>
               </div>
-
-              <div className="text-xs text-slate-500 pt-2 border-t border-slate-100 dark:border-slate-800">
-                Fatal Requirements: {key === 'ZERO_TOLERANCE' ? 'YES (Critical)' : 'NO'}
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )
       )}
 
       {/* TAB 3: EVIDENCE GAPS & REMEDIATION */}
@@ -778,26 +849,34 @@ export const AuditComplianceView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {sessions.map((s: any) => (
-                <tr key={s.audit_id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50">
-                  <td className="p-3.5 font-bold text-slate-900 dark:text-slate-100">{s.audit_id}</td>
-                  <td className="p-3.5 text-slate-600 dark:text-slate-400">{s.audit_date}</td>
-                  <td className="p-3.5 font-medium text-slate-800 dark:text-slate-200">{s.agency_name}</td>
-                  <td className="p-3.5 font-bold">{s.overall_score} / {s.max_score}</td>
-                  <td className="p-3.5">{renderOverallBadge(s.overall_status)}</td>
-                  <td className="p-3.5 text-right">
-                    <button
-                      onClick={() => {
-                        loadSessionDetail(s.audit_id);
-                        setActiveTab('checklist');
-                      }}
-                      className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold rounded-lg hover:bg-indigo-100"
-                    >
-                      Load Session
-                    </button>
+              {sessions.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="p-8 text-center text-slate-400 font-medium">
+                    No past audit evaluations recorded.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                sessions.map((s: any) => (
+                  <tr key={s.audit_id} className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50">
+                    <td className="p-3.5 font-bold text-slate-900 dark:text-slate-100">{s.audit_id}</td>
+                    <td className="p-3.5 text-slate-600 dark:text-slate-400">{s.audit_date}</td>
+                    <td className="p-3.5 font-medium text-slate-800 dark:text-slate-200">{s.agency_name}</td>
+                    <td className="p-3.5 font-bold">{s.overall_score} / {s.max_score}</td>
+                    <td className="p-3.5">{renderOverallBadge(s.overall_status)}</td>
+                    <td className="p-3.5 text-right">
+                      <button
+                        onClick={() => {
+                          loadSessionDetail(s.audit_id);
+                          setActiveTab('checklist');
+                        }}
+                        className="px-2.5 py-1 bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold rounded-lg hover:bg-indigo-100"
+                      >
+                        Load Session
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

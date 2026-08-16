@@ -49,6 +49,7 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         created_at TEXT,
         modified_at TEXT,
         extracted_text_preview TEXT,
+        extracted_text TEXT,
         metadata_json TEXT,
         warnings_json TEXT,
         ai_summary_json TEXT
@@ -127,6 +128,7 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
 
       CREATE TABLE IF NOT EXISTS audit_sessions (
         audit_id TEXT PRIMARY KEY,
+        scan_id TEXT,
         audit_date TEXT NOT NULL,
         agency_name TEXT NOT NULL,
         auditor_name TEXT NOT NULL,
@@ -211,6 +213,16 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         created_at TEXT NOT NULL
       );
     `);
+
+    // Database schema migrations for existing databases
+    try {
+      const sessionCols = db.prepare("PRAGMA table_info(audit_sessions)").all() as { name: string }[];
+      if (!sessionCols.some(c => c.name === 'scan_id')) {
+        db.exec("ALTER TABLE audit_sessions ADD COLUMN scan_id TEXT;");
+      }
+    } catch (migErr) {
+      console.warn('[DB Migration] audit_sessions migration check:', migErr);
+    }
 
     // Seed default built-in rules if table is empty
     const countRow = db.prepare('SELECT COUNT(*) as count FROM rules').get() as { count: number };

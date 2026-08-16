@@ -8,6 +8,59 @@ export type AuditCategory = 'ZERO_TOLERANCE' | 'GOVERNANCE_COMPLIANCE_INFOSEC' |
 
 export type RequirementLogic = 'SINGLE' | 'AND' | 'OR' | 'GROUP';
 
+export type EvidenceSourceType =
+  | 'DOCUMENT_EVIDENCE'
+  | 'TEST_METADATA'
+  | 'APPLICATION_METADATA'
+  | 'SYSTEM_METADATA'
+  | 'UNKNOWN';
+
+export type EvidenceDomain =
+  | 'GST_REGISTRATION'
+  | 'BIOMETRIC_ACCESS_CONTROL'
+  | 'WORKSPACE_SEGREGATION'
+  | 'DRA_CERTIFICATION'
+  | 'POLICE_VERIFICATION'
+  | 'CODE_OF_CONDUCT_DISCIPLINARY'
+  | 'AGENT_ONBOARDING'
+  | 'ENDPOINT_DATA_RESTRICTION'
+  | 'ENDPOINT_SECURITY_POLICY'
+  | 'ENDPOINT_DATA_RESTRICTION_CONFIG'
+  | 'WEB_COMMUNICATION_FILTERING'
+  | 'WEB_FILTERING_POLICY'
+  | 'WEB_COMMUNICATION_FILTERING_CONFIG'
+  | 'CLEAN_DESK'
+  | 'AGENCY_ID_CARD'
+  | 'OFFBOARDING_DEACTIVATION'
+  | 'STAFF_ATTIRE'
+  | 'REFRESHER_TRAINING'
+  | 'PERFORMANCE_NDC'
+  | 'SCREEN_CAPTURE_RESTRICTION'
+  | 'PASSWORD_POLICY'
+  | 'OS_PATCH_MANAGEMENT'
+  | 'PF_ESIC_PRINCIPAL_EMPLOYER'
+  | 'PF_ESIC_REGISTRATION'
+  | 'PRINCIPAL_EMPLOYER_CERTIFICATE'
+  | 'HR_POSH_POLICY'
+  | 'PREMISES_AND_ESTABLISHMENT'
+  | 'RENT_LEASE_AGREEMENT'
+  | 'SHOPS_ESTABLISHMENT_CERTIFICATE'
+  | 'COMMERCIAL_GENERAL_LIABILITY_INSURANCE'
+  | 'VISITOR_REGISTER'
+  | 'CCTV_SURVEILLANCE_RETENTION'
+  | 'CCTV_INSTALLATION'
+  | 'CCTV_RETENTION_CONFIG'
+  | 'FIRE_EXTINGUISHER_SAFETY'
+  | 'FIRE_DRILL_RECENCY'
+  | 'INFRASTRUCTURE_REDUNDANCY_EDR'
+  | 'POWER_BACKUP'
+  | 'INTERNET_BACKUP'
+  | 'ANTIVIRUS_EDR'
+  | 'BUSINESS_CONTINUITY_PLAN'
+  | 'ESCALATION_MATRIX'
+  | 'UNASSIGNED'
+  | 'TEST_METADATA_DOMAIN';
+
 export type DateSemanticType =
   | 'ISSUE_DATE'
   | 'EFFECTIVE_DATE'
@@ -31,6 +84,8 @@ export interface SubControlRequirement {
   title?: string;
   name?: string;
   description?: string;
+  domain?: EvidenceDomain;
+  allowed_domains?: EvidenceDomain[];
   evidence_types?: string[];
   evidenceTypes?: string[];
   keywords?: string[];
@@ -52,6 +107,9 @@ export interface SubControlResult {
   title?: string;
   name?: string;
   description?: string;
+  domain?: EvidenceDomain;
+  document_domain?: EvidenceDomain;
+  domain_match?: boolean;
   status: AuditParameterStatus;
   evidence: EvidenceItem[];
   evidence_types?: string[];
@@ -73,6 +131,8 @@ export interface AuditParameter {
   category_name: string;
   category_weight: number;
   parameter: string;
+  domain?: EvidenceDomain;
+  allowed_domains?: EvidenceDomain[];
   fatal: boolean;
   severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
   required_evidence: string[];
@@ -106,6 +166,19 @@ export interface EvidenceItem {
   snippet: string;
   page?: number;
   created_at: string;
+  source_type?: EvidenceSourceType;
+  sourceType?: EvidenceSourceType;
+  control_id?: string;
+  control_domain?: EvidenceDomain;
+  controlDomain?: EvidenceDomain;
+  document_domain?: EvidenceDomain;
+  documentDomain?: EvidenceDomain;
+  domain_match?: boolean;
+  domainMatch?: boolean;
+  structured_fields?: Record<string, any>;
+  validation_status?: 'PASS' | 'REVIEW' | 'FAIL' | 'VALIDATED' | 'FILENAME_ONLY' | 'REJECTED' | 'REJECTED_DOMAIN_MISMATCH' | string;
+  validation_reason?: string;
+  validationReason?: string;
   candidate?: boolean;
   satisfies_control?: boolean;
   filename_match?: boolean;
@@ -287,6 +360,7 @@ export interface AuditSessionEntityResolutionResult {
 
 export interface AuditSession {
   audit_id: string;
+  scan_id?: string;
   audit_date: string;
   agency_name: string;
   auditor_name: string;

@@ -1,0 +1,14 @@
+--- backend/extractors/pdfExtractor.ts
++++ backend/extractors/pdfExtractor.ts
+@@ -1,11 +1,8 @@
+ import fs from 'node:fs';
+ import path from 'node:path';
+-import { createRequire } from 'node:module';
+ import { BaseExtractor, ExtractionResult, TableData } from './base.js';
+ 
+-const require = createRequire(import.meta.url);
+-const pdf = require('pdf-parse');
++import pdf from 'pdf-parse/lib/pdf-parse.js';
+ 
+ export class PDFExtractor extends BaseExtractor {
+   public canHandle(filePath: string): boolean {

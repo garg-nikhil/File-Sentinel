@@ -1,6 +1,7 @@
 import { AuditParameter, AuditParameterResult, EvidenceItem, PolicyImplementationStatus, PoliceVerificationStatus } from './models.js';
 import { DateEvaluator } from './dateEvaluator.js';
 import { CompoundEvaluator } from './compoundEvaluator.js';
+import { calculateEvidencePriority } from './evidenceMatcher.js';
 
 export class AuditEvaluator {
   /**
@@ -11,6 +12,9 @@ export class AuditEvaluator {
     evidenceItems: EvidenceItem[],
     auditDate: string = new Date().toISOString().split('T')[0]
   ): AuditParameterResult {
+    // Sort evidence candidates by deterministic priority
+    evidenceItems = [...evidenceItems].sort((a, b) => calculateEvidencePriority(b, parameter) - calculateEvidencePriority(a, parameter));
+
     // COMPOUND / SUB-CONTROL EVALUATION DELEGATION
     const isCompound = Boolean(
       (parameter.requirements && parameter.requirements.length > 0) ||

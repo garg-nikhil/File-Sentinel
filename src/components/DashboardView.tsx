@@ -45,7 +45,7 @@ export const DashboardView: React.FC<DashboardProps> = ({
           className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors shadow-lg shadow-emerald-950/30"
         >
           <FolderSearch className="w-4 h-4" />
-          Scan Sample Folder
+          Start New Scan
         </button>
       </div>
 

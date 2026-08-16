@@ -10,6 +10,8 @@ import {
 } from './models.js';
 import { EvidenceValidator } from './evidenceValidator.js';
 import { DateEvaluator } from './dateEvaluator.js';
+import { assertEvidenceDomainMatchesControl } from './evidenceDomain.js';
+import { calculateEvidencePriority } from './evidenceMatcher.js';
 
 export class CompoundEvaluator {
   /**
@@ -163,7 +165,9 @@ export class CompoundEvaluator {
         req.evidence_types,
         evid.filename,
         docText,
-        { isPolicy, isImplementation, type: policyType }
+        { isPolicy, isImplementation, type: policyType },
+        parentParameter.id,
+        req.domain
       );
 
       return {
@@ -256,6 +260,13 @@ export class CompoundEvaluator {
       }
     }
 
+    // Prioritize exact domain match and implementation evidence for the sub-control
+    validatedItems.sort((a, b) => {
+      const priorityDiff = calculateEvidencePriority(b.evidence, undefined, req.domain) - calculateEvidencePriority(a.evidence, undefined, req.domain);
+      if (priorityDiff !== 0) return priorityDiff;
+      return b.validation.confidence - a.validation.confidence;
+    });
+
     // Sub-control PASS
     const bestItem = validatedItems[0];
     return {
@@ -266,7 +277,7 @@ export class CompoundEvaluator {
       score_earned: maxScore,
       max_score: maxScore,
       confidence: bestItem.validation.confidence,
-      evidence: validatedItems.map(i => i.evidence),
+      evidence: [bestItem.evidence],
       reason: bestItem.validation.validationReason || `Valid evidence verified for '${req.name}'.`,
       missing_requirements: []
     };
@@ -291,6 +302,15 @@ export class CompoundEvaluator {
       const snipLower = (evid.snippet || '').toLowerCase();
       const rawTextLower = ((evid.extracted_fields?.raw_text || evid.extracted_fields?.text || '') as string).toLowerCase();
       const evidTypeNorm = (evid.evidence_type || '').toLowerCase().replace(/[-\s]/g, '_');
+      const evidDomain = evid.document_domain || evid.extracted_fields?.document_domain;
+
+      // 0. Domain Compatibility Check: If requirement specifies domain and evidence has domain, enforce match
+      if (req.domain && evidDomain && evidDomain !== 'UNASSIGNED') {
+        const domainMatches = assertEvidenceDomainMatchesControl(req.domain, evidDomain, req.allowed_domains);
+        if (!domainMatches) {
+          return false;
+        }
+      }
 
       // 1. Check direct evidence_type match
       if (reqEvidenceTypes.length > 0 && reqEvidenceTypes.includes(evidTypeNorm)) {
@@ -316,19 +336,19 @@ export class CompoundEvaluator {
       if (reqIdNorm.includes('extinguisher') && (evidTypeNorm.includes('drill') || fnLower.includes('drill'))) {
         return false;
       }
-      if (reqIdNorm.includes('lease') && (evidTypeNorm.includes('shops') || fnLower.includes('shops'))) {
+      if (reqIdNorm.includes('lease') && (evidTypeNorm.includes('shops') || fnLower.includes('shops') || evidDomain === 'SHOPS_AND_ESTABLISHMENT')) {
         return false;
       }
-      if (reqIdNorm.includes('shops') && (evidTypeNorm.includes('lease') || fnLower.includes('lease'))) {
+      if (reqIdNorm.includes('shops') && (evidTypeNorm.includes('lease') || fnLower.includes('lease') || evidDomain === 'RENT_LEASE_AGREEMENT')) {
         return false;
       }
-      if (reqIdNorm.includes('power') && (evidTypeNorm.includes('antivirus') || evidTypeNorm.includes('internet') || fnLower.includes('antivirus') || fnLower.includes('internet'))) {
+      if (reqIdNorm.includes('power') && !rawTextLower.includes('power') && !rawTextLower.includes('ups') && !rawTextLower.includes('generator') && (evidTypeNorm.includes('antivirus') || fnLower.includes('antivirus'))) {
         return false;
       }
-      if (reqIdNorm.includes('internet') && (evidTypeNorm.includes('power') || evidTypeNorm.includes('antivirus') || fnLower.includes('ups') || fnLower.includes('antivirus'))) {
+      if (reqIdNorm.includes('internet') && !rawTextLower.includes('internet') && !rawTextLower.includes('isp') && !rawTextLower.includes('failover') && (evidTypeNorm.includes('antivirus') || fnLower.includes('antivirus'))) {
         return false;
       }
-      if (reqIdNorm.includes('antivirus') && (evidTypeNorm.includes('power') || evidTypeNorm.includes('internet') || fnLower.includes('ups') || fnLower.includes('isp'))) {
+      if (reqIdNorm.includes('antivirus') && !rawTextLower.includes('antivirus') && !rawTextLower.includes('edr') && (fnLower.includes('ups') || fnLower.includes('isp'))) {
         return false;
       }
 

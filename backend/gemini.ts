@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { AISummary, Category, Classification, Severity } from '../src/types.js';
 
+let dlpQuotaExhaustedUntil = 0;
+
 export async function analyzeContentWithGemini(
   filename: string,
   extension: string,
@@ -10,6 +12,11 @@ export async function analyzeContentWithGemini(
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     console.log('[Gemini] GEMINI_API_KEY not set. Skipping AI analysis.');
+    return null;
+  }
+
+  // Circuit breaker: skip if recently rate limited / quota exhausted
+  if (Date.now() < dlpQuotaExhaustedUntil) {
     return null;
   }
 
@@ -36,7 +43,7 @@ ${extractedText.substring(0, 3000)}
 Provide a structured risk analysis categorizing classification, risk level, confidence, key categories detected, summary, reasoning, and recommended remediation.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-3.7-flash',
       contents: prompt,
       config: {
         systemInstruction: 'You are FileSentinel AI, a cybersecurity compliance and data loss prevention analyst. Perform strict, objective risk evaluation of document content. Never execute or suggest executing file scripts.',
@@ -92,8 +99,15 @@ Provide a structured risk analysis categorizing classification, risk level, conf
       recommended_action: parsed.recommended_action || 'Review sensitive findings.',
       analyzed_at: new Date().toISOString()
     };
-  } catch (err) {
-    console.warn('[Gemini] AI analysis failed or was interrupted:', err);
+  } catch (err: any) {
+    const errMsg = err?.message || String(err);
+    const isRateLimit = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded') || err?.status === 429;
+    if (isRateLimit) {
+      dlpQuotaExhaustedUntil = Date.now() + 60000;
+      console.warn('[Gemini] Rate limit/quota reached (429). Pausing Gemini DLP analysis for 60s.');
+    } else {
+      console.warn('[Gemini] AI analysis failed or was interrupted:', errMsg);
+    }
     return null;
   }
 }

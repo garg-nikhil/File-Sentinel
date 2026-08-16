@@ -14,22 +14,13 @@ export const ScanView: React.FC<ScanViewProps> = ({
   activeScan,
   setActiveScan
 }) => {
-  const [folderPath, setFolderPath] = useState('./sample-files');
+  const [folderPath, setFolderPath] = useState('');
   const [isScanning, setIsScanning] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const presets = [
-    { label: 'All Sample Datasets', path: './sample-files' },
-    { label: 'Finance & Payroll', path: './sample-files/finance' },
-    { label: 'Developer Credentials', path: './sample-files/dev-keys' },
-    { label: 'HR Directory', path: './sample-files/hr' },
-    { label: 'Network & Security Map', path: './sample-files/security' },
-    { label: 'Public Documents (Safe)', path: './sample-files/public' }
-  ];
 
   useEffect(() => {
     let timer: any;
@@ -103,7 +94,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
           Target Folder Selection & Scan Execution
         </h2>
         <p className="text-sm text-slate-400 mt-1">
-          Select a local root directory for recursive file discovery and static compliance analysis.
+          Scans files, analyzes security risks, and evaluates audit compliance.
         </p>
       </div>
 
@@ -139,7 +130,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
               type="text"
               value={folderPath}
               onChange={e => setFolderPath(e.target.value)}
-              placeholder="e.g. ./sample-files or uploaded path"
+              placeholder="e.g. /path/to/folder or click 'Upload Local Folder' above"
               disabled={isScanning || isUploading}
               className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-4 py-2.5 text-sm font-mono text-slate-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50"
             />
@@ -150,7 +141,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
               className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium px-6 py-2.5 rounded-lg flex items-center gap-2 text-sm transition-colors disabled:opacity-50 shadow-md whitespace-nowrap"
             >
               <Play className="w-4 h-4 fill-current" />
-              {isScanning ? 'Scanning...' : 'Start Scan'}
+              {isScanning ? 'Scanning...' : 'Scan Now'}
             </button>
           </div>
           {isUploading && (
@@ -168,29 +159,6 @@ export const ScanView: React.FC<ScanViewProps> = ({
             </div>
           )}
           {errorMsg && <p className="text-xs text-red-400 mt-2">{errorMsg}</p>}
-        </div>
-
-        {/* Quick Select Presets */}
-        <div>
-          <span className="text-xs font-semibold uppercase tracking-wider text-slate-400 block mb-2.5">
-            Quick Select Preset Target Folders
-          </span>
-          <div className="flex flex-wrap gap-2">
-            {presets.map(p => (
-              <button
-                key={p.path}
-                onClick={() => setFolderPath(p.path)}
-                disabled={isScanning}
-                className={`text-xs px-3 py-1.5 rounded-md font-mono transition-colors border ${
-                  folderPath === p.path
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/40 font-semibold'
-                    : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* Supported Ext List */}
@@ -229,22 +197,45 @@ export const ScanView: React.FC<ScanViewProps> = ({
           </div>
 
           {/* Progress bar */}
-          <div className="space-y-2">
-            <div className="flex justify-between text-xs font-mono">
-              <span className="text-slate-400">
-                Processed {activeScan.processed_files} of {activeScan.total_files} files
-              </span>
-              <span className="text-emerald-400 font-bold">{progressPercent}%</span>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <div className="flex justify-between text-xs font-mono">
+                <span className="text-slate-400">
+                  Processed {activeScan.processed_files} of {activeScan.total_files} files
+                </span>
+                <span className="text-emerald-400 font-bold">{progressPercent}%</span>
+              </div>
+              <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-300"
+                  style={{ width: `${progressPercent}%` }}
+                ></div>
+              </div>
             </div>
-            <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
-              <div
-                className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-300"
-                style={{ width: `${progressPercent}%` }}
-              ></div>
-            </div>
-            {activeScan.current_file && (
+
+            {activeScan.status === 'SCANNING' && (
+              <div className="flex flex-col gap-1.5 text-xs font-mono bg-slate-950/50 p-4 rounded-lg border border-slate-800/50">
+                <div className={activeScan.current_file === 'Discovering files...' ? 'text-emerald-400 font-semibold' : 'text-slate-500'}>
+                  {activeScan.current_file === 'Discovering files...' ? 'Step 1/5 — Discovering files...' : '✓ Step 1/5 — Discovering files'}
+                </div>
+                <div className={activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
+                  {activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? '✓ Step 2/5 — Extracting evidence' : 'Step 2/5 — Extracting evidence'}
+                </div>
+                <div className={activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
+                  {activeScan.current_file === 'Evaluating compliance...' || activeScan.current_file === 'Finalizing results...' ? '✓ Step 3/5 — Security analysis' : 'Step 3/5 — Security analysis'}
+                </div>
+                <div className={activeScan.current_file === 'Evaluating compliance...' ? 'text-emerald-400 font-semibold' : activeScan.current_file === 'Finalizing results...' ? 'text-slate-500' : 'text-slate-600 opacity-50'}>
+                  {activeScan.current_file === 'Finalizing results...' ? '✓ Step 4/5 — Audit compliance' : 'Step 4/5 — Audit compliance'}
+                </div>
+                <div className={activeScan.current_file === 'Finalizing results...' ? 'text-emerald-400 font-semibold' : 'text-slate-600 opacity-50'}>
+                  Step 5/5 — Finalizing results
+                </div>
+              </div>
+            )}
+
+            {activeScan.current_file && activeScan.current_file !== 'Discovering files...' && activeScan.current_file !== 'Evaluating compliance...' && activeScan.current_file !== 'Finalizing results...' && (
               <div className="text-xs text-slate-400 font-mono truncate">
-                Current file: <span className="text-slate-200">{activeScan.current_file}</span>
+                Processing file: <span className="text-slate-200">{activeScan.current_file}</span>
               </div>
             )}
           </div>

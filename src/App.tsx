@@ -18,6 +18,7 @@ export default function App() {
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [activeScan, setActiveScan] = useState<ScanSession | null>(null);
+  const [recentScanId, setRecentScanId] = useState<string | null>(null);
 
   useEffect(() => {
     loadStats();
@@ -42,7 +43,8 @@ export default function App() {
 
   const handleScanComplete = (scanId: string) => {
     loadStats();
-    setActiveTab('files');
+    setRecentScanId(scanId);
+    setActiveTab('audit');
   };
 
   return (
@@ -53,6 +55,9 @@ export default function App() {
         setActiveTab={tab => {
           setSelectedFileId(null);
           setActiveTab(tab);
+          if (tab !== 'audit') {
+            setRecentScanId(null);
+          }
         }}
         isScanning={activeScan?.status === 'SCANNING'}
       />
@@ -77,7 +82,7 @@ export default function App() {
 
             {activeTab === 'audit' && (
               <div className="p-6">
-                <AuditComplianceView />
+                <AuditComplianceView recentScanId={recentScanId} />
               </div>
             )}
 

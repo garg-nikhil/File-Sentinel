@@ -105,11 +105,15 @@ export class EvidenceValidator {
 
       case 'ZTI-002': { // Biometric Access Control
         detectedEvidenceType = 'BIOMETRIC_ACCESS_CONFIG';
-        const hasBiometricLogs = /(?:punch\s*in|punch\s*out|badge\s*id|biometric\s*terminal|fingerprint\s*reader|access\s*log|card\s*reader\s*log)/i.test(text);
+        const hasBiometricLogs = /(?:punch\s*in|punch\s*out|badge\s*id|biometric\s*terminal|fingerprint\s*reader|access\s*control\s*door|turnstile\s*log|card\s*reader\s*log|door\s*controller)/i.test(text);
         const hasTimestamps = /(?:\d{1,2}:\d{2}(?::\d{2})?\s*(?:am|pm)?|\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})/i.test(text);
-        const hasDeviceConfig = /(?:ip\s*address|mac\s*address|firmware|controller\s*id|terminal\s*config)/i.test(text);
+        const hasDeviceConfig = /(?:biometric\s*controller|door\s*access\s*controller|terminal\s*config|badge\s*reader\s*config|access\s*point\s*controller)/i.test(text);
+        const isCctvDoc = /(?:cctv|surveillance camera|dvr|nvr|90 days retention)/i.test(text) && !hasBiometricLogs && !hasDeviceConfig;
 
-        if (hasBiometricLogs && (hasTimestamps || personName)) {
+        if (isCctvDoc) {
+          missingMandatoryFields.push('Biometric Access Control Terminal Logs or Door Controller Hardware Config');
+          validationReason = 'Document is a CCTV surveillance record, which cannot satisfy Biometric Access Control requirements.';
+        } else if (hasBiometricLogs && (hasTimestamps || personName)) {
           fieldValidation = true;
           validated = true;
           semanticMatch = true;
@@ -148,15 +152,19 @@ export class EvidenceValidator {
 
       case 'ZTI-004': { // DRA Certificate
         detectedEvidenceType = 'DRA_CERTIFICATE';
-        const certMatch = text.match(/\b(DRA|CERT|NBFET)[-_#:\s]\d{3,12}\b/i) || text.match(/\b(?:certificate\s*(?:no|number|#|num|id)[:\s#.]+|certificate[:#]\s*)([A-Z0-9\-_/]{3,25})\b/i);
-        const hasDraContext = /(?:debt recovery agent|dra trained|dra certification|certificate of completion|nbfet)/i.test(text);
-        const hasStatus = /(?:status:\s*passed|status:\s*completed|status:\s*certified|\bpassed\b|\bcompleted\b)/i.test(text);
+        const certMatch = text.match(/\b(?:certificate\s*(?:no|number|#|num|id)[:\s#.]+|certificate[:#]\s*)([A-Z0-9\-_/]{3,25})\b/i) ||
+          text.match(/\b((?:DRA|CERT|NBFET|IIBF)[-_#:\s/][A-Z0-9\-_/]{3,20})\b/i) ||
+          text.match(/\b(DRA\s*\/\s*\d{4}\s*\/\s*\d{3,10})\b/i);
+        const hasDraContext = /(?:debt recovery agent|dra trained|dra certification|certificate of completion|nbfet|dra passed|trained certificate|iibf|recovery agent)/i.test(text) ||
+          (filenameLower.includes('dra') && /(?:certificate|training|passed|exam|cert|agent)/i.test(text)) ||
+          Boolean(certMatch && /dra/i.test(certMatch[0]));
+        const hasStatus = /(?:status:\s*passed|status:\s*completed|status:\s*certified|\bpassed\b|\bcompleted\b|\btrained\b)/i.test(text);
 
         if (certMatch) {
           extractedFields['certificate_number'] = certMatch[1] || certMatch[0];
         }
 
-        if (hasDraContext && (certMatch || (personName && hasStatus && extractedDates.expiryDate))) {
+        if (hasDraContext && (certMatch || (personName && hasStatus))) {
           fieldValidation = true;
           validated = true;
           semanticMatch = true;
@@ -196,12 +204,31 @@ export class EvidenceValidator {
         break;
       }
 
+      case 'ZTI-007': { // Agent Onboarding Documents Authentication
+        detectedEvidenceType = 'AGENT_ONBOARDING_DOSSIER';
+        const hasOnboardingContext = /(?:agent onboarding|onboarding dossier|kyc verification|joining report|pre-hire verification|background check approval)/i.test(text);
+        const hasApproval = /(?:approved|authenticated|verified by|hr approval|manager approval|authorized)/i.test(text);
+        const hasChecklist = /(?:checklist|dossier|document collected|documents verified)/i.test(text);
+
+        if (hasOnboardingContext && (hasApproval || hasChecklist)) {
+          fieldValidation = true;
+          validated = true;
+          semanticMatch = true;
+          confidence = 0.95;
+          validationReason = 'Agent onboarding and KYC documentation record validated.';
+        } else {
+          missingMandatoryFields.push('Agent Onboarding Checklist / KYC Authentication Record');
+          validationReason = 'Document lacks explicit agent onboarding context, checklist, or HR approval signatures.';
+        }
+        break;
+      }
+
       case 'ZTI-008': { // USB & Cloud storage access restriction
         const isPolicyDoc = policyVsImpl.isPolicy;
-        const isImplDoc = policyVsImpl.isImplementation || /(?:gpo|applocker|dlp|registry|disabled|blocked|restricted|endpoint security|usb storage)/i.test(text);
-        if (isImplDoc) {
+        const isImplDoc = policyVsImpl.isImplementation || /(?:active\s*gpo|gpo\s*name|registry\s*key|storagedevicepolicies|deny_all|system\s*dump|configuration\s*export|storport)/i.test(text);
+        if (isImplDoc && policyVsImpl.type !== 'POLICY_ONLY') {
           detectedEvidenceType = 'DLP_GPO_CONFIGURATION_EXPORT';
-          const hasTechnicalDetails = /(?:removable\s*media|usb\s*storage|cloud\s*storage|gpo|dlp|registry\s*key|block\s*rule|disabled|denied)/i.test(text);
+          const hasTechnicalDetails = /(?:removable\s*media|usb\s*storage|cloud\s*storage|gpo|dlp|registry\s*key|block\s*rule|disabled|denied|storagedevicepolicies|deny_all|storport)/i.test(text);
           if (hasTechnicalDetails) {
             fieldValidation = true;
             validated = true;
@@ -228,8 +255,8 @@ export class EvidenceValidator {
 
       case 'ZTI-009': { // Blacklisting of social sites / personal email / messaging
         const isPolicyDoc = policyVsImpl.isPolicy;
-        const isImplDoc = policyVsImpl.isImplementation || /(?:firewall|proxy|url\s*filtering|blacklist|block\s*rule|squid|fortinet|palo\s*alto|checkpoint)/i.test(text);
-        if (isImplDoc) {
+        const isImplDoc = policyVsImpl.isImplementation || /(?:firewall\s*rule|proxy\s*config|squid\s*proxy|fortigate|palo\s*alto|checkpoint|iptables|rule\s*id|action:\s*(?:deny|drop))/i.test(text);
+        if (isImplDoc && policyVsImpl.type !== 'POLICY_ONLY') {
           detectedEvidenceType = 'FIREWALL_PROXY_CONFIGURATION_EXPORT';
           const hasFilteringRules = /(?:social\s*media|personal\s*email|messaging|facebook|whatsapp|telegram|instagram|gmail|blocked|drop|deny|url\s*category|filter\s*rule)/i.test(text);
           if (hasFilteringRules) {
@@ -292,10 +319,14 @@ export class EvidenceValidator {
         const hasLease = /(?:lease agreement|rent agreement|rental agreement|tenancy agreement|commercial lease|lessor|lessee|landlord|tenant)/i.test(text);
         const hasLeaseTerms = /(?:premises|monthly rent|deposit|lease period|term of lease|address of premises|hereby agree)/i.test(text);
 
-        const hasShops = /(?:shops and establishment|shops & establishment|commercial establishment|form c|shops act|registration certificate)/i.test(text);
+        const hasShops = /(?:shops and establishment|shops & establishment|commercial establishment act|form c|shops act|shops registration)/i.test(text);
         const shopsRegMatch = text.match(/\b(?:SEC|SEA|REG|SHOPS|FORM[-_]?C)[-_#:\s]?[A-Z0-9\-_/]{3,25}\b/i);
+        const isGstDoc = /(?:gstin|goods and services tax|form gst reg)/i.test(text) && !hasLease && !hasShops;
 
-        if (hasLease && hasLeaseTerms) {
+        if (isGstDoc) {
+          missingMandatoryFields.push('Premises Rent/Lease Agreement or Shops & Establishment Certificate');
+          validationReason = 'Document is a GST Registration record, which cannot satisfy Premises/Shops & Establishment requirements.';
+        } else if (hasLease && hasLeaseTerms) {
           detectedEvidenceType = 'LEASE_AGREEMENT';
           fieldValidation = true;
           validated = true;
@@ -573,7 +604,9 @@ export class EvidenceValidator {
     evidenceTypes: string[] | undefined,
     filename: string,
     text: string,
-    policyVsImpl: { isPolicy: boolean; isImplementation: boolean; type: string }
+    policyVsImpl: { isPolicy: boolean; isImplementation: boolean; type: string },
+    parentControlId?: string,
+    subControlDomain?: string
   ): ValidationResult {
     const normalizedSub = subControlId.toUpperCase().replace(/[-\s]/g, '_');
     const normalizedTypes = (evidenceTypes || []).map(t => t.toUpperCase().replace(/[-\s]/g, '_'));
@@ -861,7 +894,36 @@ export class EvidenceValidator {
 
       case 'POLICY_EVIDENCE': {
         detectedEvidenceType = 'POLICY_DOCUMENT';
-        if (policyVsImpl.isPolicy || /(?:policy|procedure|standard|guideline|governance)/i.test(text)) {
+        const isPolicyDoc = policyVsImpl.isPolicy || /(?:policy|procedure|standard|guideline|governance|sop)/i.test(text);
+        
+        // Check domain-specific policy requirements if scoped
+        if (parentControlId === 'ZTI-008' || subControlDomain === 'ENDPOINT_SECURITY_POLICY') {
+          const hasEndpointPolicy = /(?:endpoint security|usb[-_\s]*restriction|removable[-_\s]*media|cloud[-_\s]*storage policy|device[-_\s]*control policy|storage[-_\s]*restriction|usb[-_\s]*storage[-_\s]*control|usb[-_\s]*policy|storage[-_\s]*policy)/i.test(text);
+          if (hasEndpointPolicy && isPolicyDoc) {
+            detectedEvidenceType = 'ENDPOINT_SECURITY_POLICY';
+            fieldValidation = true;
+            validated = true;
+            semanticMatch = true;
+            confidence = 0.90;
+            validationReason = 'Approved endpoint security & removable media restriction policy verified.';
+          } else {
+            missingMandatoryFields.push('Endpoint Security & Removable Media Restriction Policy');
+            validationReason = 'Document is not an approved endpoint security or USB restriction policy.';
+          }
+        } else if (parentControlId === 'ZTI-009' || subControlDomain === 'WEB_FILTERING_POLICY') {
+          const hasWebFilteringPolicy = /(?:web filtering|acceptable use|internet usage|social media policy|messaging apps policy|personal email)/i.test(text);
+          if (hasWebFilteringPolicy && isPolicyDoc) {
+            detectedEvidenceType = 'WEB_FILTERING_POLICY';
+            fieldValidation = true;
+            validated = true;
+            semanticMatch = true;
+            confidence = 0.90;
+            validationReason = 'Approved web filtering & acceptable communication usage policy verified.';
+          } else {
+            missingMandatoryFields.push('Web Filtering & Communication Acceptable Use Policy');
+            validationReason = 'Document is not an approved web filtering or personal communication blacklisting policy.';
+          }
+        } else if (isPolicyDoc) {
           fieldValidation = true;
           validated = true;
           semanticMatch = true;
@@ -876,7 +938,42 @@ export class EvidenceValidator {
 
       case 'IMPLEMENTATION_EVIDENCE': {
         detectedEvidenceType = 'IMPLEMENTATION_EVIDENCE';
-        if (policyVsImpl.isImplementation || /(?:configuration|gpo|dlp|registry|firewall|proxy|rule|blacklist|screenshot|export|log|console)/i.test(text)) {
+        const isImplDoc = policyVsImpl.isImplementation || /(?:configuration|gpo|dlp|registry|firewall|proxy|rule|blacklist|screenshot|export|log|console|endpoint|syn-endpoint)/i.test(text);
+
+        // Check domain-specific implementation requirements if scoped
+        if (parentControlId === 'ZTI-008' || subControlDomain === 'ENDPOINT_DATA_RESTRICTION_CONFIG') {
+          const hasEndpointImpl = /(?:storagedevicepolicies|removable[-_\s]*media|usb[-_\s]*(?:storage[-_\s]*)?block(?:ed)?|dlp[-_\s]*config|deny_all|registry|storport|writeprotect|removabledisks|deny_write|disable-removable-media|gpo[-_\s]*configuration|gpo[-_\s]*audit|gpo[-_\s]*status|usb_block|syn-endpoint)/i.test(text);
+          if (hasEndpointImpl && isImplDoc) {
+            detectedEvidenceType = 'DLP_GPO_CONFIGURATION_EXPORT';
+            fieldValidation = true;
+            validated = true;
+            semanticMatch = true;
+            confidence = 0.95;
+            validationReason = 'Operational GPO/DLP USB and removable storage technical restriction configuration verified.';
+          } else if (policyVsImpl.isPolicy && !isImplDoc) {
+            missingMandatoryFields.push('Technical GPO/DLP Configuration Export (Registry / Group Policy Dump)');
+            validationReason = 'Document is a policy document; technical configuration proof is required.';
+          } else {
+            missingMandatoryFields.push('Technical GPO/DLP USB Storage Restriction Configuration');
+            validationReason = 'Document lacks technical GPO / DLP removable media restriction settings.';
+          }
+        } else if (parentControlId === 'ZTI-009' || subControlDomain === 'WEB_COMMUNICATION_FILTERING_CONFIG') {
+          const hasWebFilteringImpl = /(?:firewall|proxy|url\s*filtering|blacklist|rule_id|rule[-_]?fw|social\s*media|personal\s*email|messaging|squid|fortigate|palo\s*alto|checkpoint|iptables|action\s*[:;=]?\s*(?:deny|drop)|target_domain)/i.test(text);
+          if (hasWebFilteringImpl && isImplDoc) {
+            detectedEvidenceType = 'FIREWALL_PROXY_CONFIGURATION_EXPORT';
+            fieldValidation = true;
+            validated = true;
+            semanticMatch = true;
+            confidence = 0.95;
+            validationReason = 'Operational firewall/proxy URL filtering and blacklisting configuration verified.';
+          } else if (policyVsImpl.isPolicy && !isImplDoc) {
+            missingMandatoryFields.push('Technical Firewall / Proxy Blacklist Export');
+            validationReason = 'Document is a policy document; operational technical firewall/proxy export is required.';
+          } else {
+            missingMandatoryFields.push('Technical Firewall / Proxy URL Filtering Blacklist Rules');
+            validationReason = 'Document lacks technical proxy / firewall blacklist rules for social sites and messaging.';
+          }
+        } else if (isImplDoc) {
           fieldValidation = true;
           validated = true;
           semanticMatch = true;

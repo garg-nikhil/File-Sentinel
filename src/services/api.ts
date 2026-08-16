@@ -164,6 +164,7 @@ export const api = {
   // --- AUDIT COMPLIANCE SERVICES ---
   async runAuditScan(params?: {
     target_dir?: string;
+    scan_id?: string;
     audit_date?: string;
     agency_name?: string;
     auditor_name?: string;

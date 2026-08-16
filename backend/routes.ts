@@ -7,7 +7,6 @@ import { getDatabase } from './db.js';
 import { FileScannerEngine } from './scannerEngine.js';
 import { getCloudStorageProvider } from './quarantineService.js';
 import { analyzeContentWithGemini } from './gemini.js';
-import { ensureSampleFilesExist } from './sample_data.js';
 import { Rule, AppSettings, AuditEvent } from '../src/types.js';
 import { EvidenceEngine } from './audit/evidenceEngine.js';
 import { AuditReportGenerator } from './audit/auditReport.js';
@@ -47,9 +46,6 @@ export function createApiRouter() {
     quarantineLocalDir: './storage_bucket/quarantine_staging'
   };
 
-  // Ensure initial sample files exist on server boot
-  ensureSampleFilesExist('./sample-files').catch(err => console.error('Sample files init error:', err));
-
   // Helper for audit logging
   function logAuditEvent(action: string, filePath?: string, sha256?: string, status: 'SUCCESS' | 'WARNING' | 'ERROR' = 'SUCCESS', details?: string) {
     try {
@@ -71,8 +67,7 @@ export function createApiRouter() {
       service: 'FileSentinel Engine',
       version: '1.0.0',
       timestamp: new Date().toISOString(),
-      database: 'connected',
-      sample_files: './sample-files'
+      database: 'connected'
     });
   });
 
@@ -98,7 +93,10 @@ export function createApiRouter() {
 
   router.post('/scans', async (req: Request, res: Response) => {
     const { root_path } = req.body;
-    const targetPath = root_path || path.resolve('./sample-files');
+    if (!root_path || typeof root_path !== 'string' || !root_path.trim()) {
+      return res.status(400).json({ error: 'Please specify a target directory path or upload a folder.' });
+    }
+    const targetPath = path.resolve(root_path.trim());
 
     try {
       if (!fs.existsSync(targetPath)) {
@@ -408,33 +406,50 @@ export function createApiRouter() {
   // Trigger Audit Compliance Scan
   router.post('/audit/run', async (req: Request, res: Response) => {
     try {
-      const { target_dir, audit_date, agency_name, auditor_name } = req.body;
-      const targetDir = target_dir || path.resolve('./sample-files');
-
-      if (!fs.existsSync(targetDir)) {
-        return res.status(400).json({ error: `Directory target does not exist: ${targetDir}` });
-      }
-
-      // Collect file paths
-      const filePaths: string[] = [];
-      function collectFiles(dir: string) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          if (entry.isDirectory()) collectFiles(fullPath);
-          else filePaths.push(fullPath);
+      const { target_dir, scan_id, audit_date, agency_name, auditor_name } = req.body;
+      
+      let session;
+      
+      if (scan_id) {
+        session = await evidenceEngine.runAuditScanForSession(
+          scan_id,
+          audit_date || new Date().toISOString().split('T')[0],
+          agency_name || 'Primary Telecalling & Collection Agency',
+          auditor_name || 'Automated Compliance Inspector'
+        );
+        logAuditEvent('RUN_AUDIT_COMPLIANCE', scan_id, undefined, 'SUCCESS', `Audit ID: ${session.audit_id}, Score: ${session.overall_score}`);
+      } else {
+        if (!target_dir || typeof target_dir !== 'string' || !target_dir.trim()) {
+          return res.status(400).json({ error: 'Please specify a target directory path or scan ID for audit evaluation.' });
         }
+        const targetDir = path.resolve(target_dir.trim());
+
+        if (!fs.existsSync(targetDir)) {
+          return res.status(400).json({ error: `Directory target does not exist: ${targetDir}` });
+        }
+
+        // Collect file paths
+        const filePaths: string[] = [];
+        function collectFiles(dir: string) {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) collectFiles(fullPath);
+            else filePaths.push(fullPath);
+          }
+        }
+        collectFiles(targetDir);
+
+        session = await evidenceEngine.runAuditScan(
+          filePaths,
+          audit_date || new Date().toISOString().split('T')[0],
+          agency_name || 'Primary Telecalling & Collection Agency',
+          auditor_name || 'Automated Compliance Inspector'
+        );
+
+        logAuditEvent('RUN_AUDIT_COMPLIANCE', targetDir, undefined, 'SUCCESS', `Audit ID: ${session.audit_id}, Score: ${session.overall_score}`);
       }
-      collectFiles(targetDir);
-
-      const session = await evidenceEngine.runAuditScan(
-        filePaths,
-        audit_date || new Date().toISOString().split('T')[0],
-        agency_name || 'Primary Telecalling & Collection Agency',
-        auditor_name || 'Automated Compliance Inspector'
-      );
-
-      logAuditEvent('RUN_AUDIT_COMPLIANCE', targetDir, undefined, 'SUCCESS', `Audit ID: ${session.audit_id}, Score: ${session.overall_score}`);
+      
       res.json(session);
     } catch (err: any) {
       console.error('[API] Audit run error:', err);

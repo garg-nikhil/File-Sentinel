@@ -1,8 +1,9 @@
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { ExtractionResult } from '../extractors/base.js';
-import { AuditParameter, EvidenceItem } from './models.js';
+import { AuditParameter, EvidenceItem, EvidenceDomain, EvidenceSourceType } from './models.js';
 import { EvidenceValidator } from './evidenceValidator.js';
+import { classifyEvidenceSource, classifyDocumentDomain, assertEvidenceDomainMatchesControl } from './evidenceDomain.js';
 
 export class EvidenceMatcher {
   /**
@@ -32,7 +33,18 @@ export class EvidenceMatcher {
     const textLower = text.toLowerCase();
     const filenameLower = filename.toLowerCase();
 
-    // 1. Stage 1: Candidate Discovery
+    // 0. Stage 0: Evidence Source Type Classification & Metadata Rejection
+    const sourceClass = classifyEvidenceSource(filename, filePath, text);
+    if (!sourceClass.isAuditEvidenceCandidate || sourceClass.sourceType !== 'DOCUMENT_EVIDENCE') {
+      // Manifests, test definitions, READMEs, scripts, and logs are NEVER audit evidence
+      return null;
+    }
+
+    // 1. Stage 1: Document Domain Classification
+    const docDomainResult = classifyDocumentDomain(filename, text);
+    const docDomain: EvidenceDomain = docDomainResult.primaryDomain;
+
+    // 2. Stage 2: Candidate Discovery
     let filenameMatch = false;
     let contentMatch = false;
     let matchedKeywordsInFilename = 0;
@@ -75,38 +87,165 @@ export class EvidenceMatcher {
       }
     }
 
-    // Baseline threshold: Must have at least a filename match or content match to be a candidate
+    // Check if document belongs to a specific conflicting compliance domain
+    const targetDomain = parameter.domain;
+    const isDirectDomainMatch = Boolean(
+      targetDomain &&
+      docDomain !== 'UNASSIGNED' &&
+      docDomain !== 'TEST_METADATA_DOMAIN' &&
+      assertEvidenceDomainMatchesControl(targetDomain, docDomain, parameter.allowed_domains)
+    );
+    if (isDirectDomainMatch) {
+      contentMatch = true;
+    }
+
+    const isDomainConflict = Boolean(
+      targetDomain &&
+      docDomain !== 'UNASSIGNED' &&
+      docDomain !== 'TEST_METADATA_DOMAIN' &&
+      !assertEvidenceDomainMatchesControl(targetDomain, docDomain, parameter.allowed_domains)
+    );
+    const isDomainCompatible = !isDomainConflict;
+
+    // Baseline threshold: Must have at least a filename match or content match to be considered
     if (!filenameMatch && !contentMatch) {
       return null;
+    }
+
+    // 3. Stage 3: Strict Cross-Domain Evidence Isolation
+    if (isDomainConflict) {
+      if (filenameMatch) {
+        // Filename claimed to be for this control, but content domain is foreign / spoofed
+        const isFilenameOnly = true;
+        const candidate = true;
+        const fieldValidation = false;
+        const metadataMatch = false;
+        const entityMatch = false;
+        const semanticMatch = false;
+        const validated = false;
+        const satisfiesControl = false;
+        const confidence = 0.35;
+        const validationReason = `Document domain (${docDomain}) does not match control domain (${targetDomain || 'UNASSIGNED'}).`;
+
+        const extractedFields: Record<string, any> = {
+          raw_text: text,
+          document_domain: docDomain,
+          control_domain: targetDomain,
+          domain_match: false,
+          source_type: sourceClass.sourceType,
+          validation_status: 'REJECTED_DOMAIN_MISMATCH',
+          validation_reason: validationReason,
+          missing_mandatory_fields: [`Evidence conforming to domain '${targetDomain || 'UNASSIGNED'}'`],
+          structure_warnings: extraction.warnings || [],
+          candidate,
+          filenameMatch,
+          contentMatch: false,
+          metadataMatch,
+          entityMatch,
+          fieldValidation,
+          semanticMatch,
+          isFilenameOnly,
+          isContentOnly: false,
+          validated,
+          satisfiesControl,
+          confidence,
+          filename_match: filenameMatch,
+          content_match: false,
+          metadata_match: metadataMatch,
+          entity_match: entityMatch,
+          field_validation: fieldValidation,
+          semantic_match: semanticMatch,
+          is_filename_only: isFilenameOnly,
+          is_content_only: false,
+          satisfies_control: satisfiesControl
+        };
+
+        return {
+          evidence_id: `EVID-${crypto.randomUUID().substring(0, 8)}`,
+          file_id: fileId,
+          filename,
+          path: filePath,
+          evidence_type: 'DOMAIN_MISMATCH_REJECTED',
+          document_domain: docDomain,
+          control_domain: targetDomain,
+          domain_match: false,
+          source_type: sourceClass.sourceType,
+          validation_status: 'REJECTED_DOMAIN_MISMATCH',
+          validation_reason: validationReason,
+          relevance: 0.35,
+          extracted_fields: extractedFields,
+          snippet: `Domain mismatch: Document is classified as '${docDomain}' but control requires '${targetDomain}'.`,
+          created_at: new Date().toISOString(),
+          candidate,
+          filenameMatch,
+          contentMatch: false,
+          metadataMatch,
+          entityMatch,
+          fieldValidation,
+          semanticMatch,
+          isFilenameOnly,
+          isContentOnly: false,
+          validated,
+          satisfiesControl,
+          confidence,
+          filename_match: filenameMatch,
+          content_match: false,
+          metadata_match: metadataMatch,
+          entity_match: entityMatch,
+          field_validation: fieldValidation,
+          semantic_match: semanticMatch,
+          is_filename_only: isFilenameOnly,
+          is_content_only: false,
+          satisfies_control: satisfiesControl
+        };
+      } else {
+        // Content just had incidental generic word overlap from another domain -> reject completely
+        return null;
+      }
     }
 
     const isFilenameOnly = filenameMatch && !contentMatch;
     const isContentOnly = contentMatch && !filenameMatch;
     const candidate = true;
 
-    // 2. Stage 2: Evidence Classification & Validation
+    // 4. Stage 4: Evidence Classification & Validation
     const policyVsImpl = this.classifyPolicyVsImplementation(filename, text);
     let valRes = EvidenceValidator.validate(filename, text, parameter, policyVsImpl);
 
     // If parameter has sub-controls/requirements and general validation didn't validate, check sub-controls
     if (!valRes.validated && parameter.requirements && parameter.requirements.length > 0) {
       for (const req of parameter.requirements) {
-        const subVal = EvidenceValidator.validateForSubControl(req.id, req.evidence_types, filename, text, policyVsImpl);
-        if (subVal.validated) {
-          valRes = {
-            ...valRes,
-            validated: true,
-            confidence: subVal.confidence,
-            fieldValidation: subVal.fieldValidation,
-            metadataMatch: valRes.metadataMatch || subVal.metadataMatch,
-            entityMatch: valRes.entityMatch || subVal.entityMatch,
-            semanticMatch: true,
-            detectedEvidenceType: subVal.detectedEvidenceType,
-            validationReason: subVal.validationReason,
-            missingMandatoryFields: subVal.missingMandatoryFields,
-            extractedFields: { ...valRes.extractedFields, ...subVal.extractedFields }
-          };
-          break;
+        const reqDomain = req.domain;
+        const reqDomainMatches = reqDomain
+          ? assertEvidenceDomainMatchesControl(reqDomain, docDomain, req.allowed_domains)
+          : true;
+
+        if (reqDomainMatches) {
+          const subVal = EvidenceValidator.validateForSubControl(
+            req.id,
+            req.evidence_types,
+            filename,
+            text,
+            policyVsImpl,
+            parameter.id,
+            req.domain
+          );
+          if (subVal.validated) {
+            valRes = {
+              ...valRes,
+              validated: true,
+              confidence: subVal.confidence,
+              fieldValidation: subVal.fieldValidation,
+              metadataMatch: valRes.metadataMatch || subVal.metadataMatch,
+              entityMatch: valRes.entityMatch || subVal.entityMatch,
+              semanticMatch: true,
+              detectedEvidenceType: subVal.detectedEvidenceType,
+              validationReason: subVal.validationReason,
+              missingMandatoryFields: subVal.missingMandatoryFields,
+              extractedFields: { ...valRes.extractedFields, ...subVal.extractedFields }
+            };
+            break;
+          }
         }
       }
     }
@@ -118,7 +257,7 @@ export class EvidenceMatcher {
     const validated = isFilenameOnly ? false : valRes.validated;
     const confidence = isFilenameOnly ? 0.40 : valRes.confidence;
 
-    // 3. Stage 3: Control Satisfaction
+    // 5. Stage 5: Control Satisfaction
     let satisfiesControl = false;
     if (isFilenameOnly) {
       satisfiesControl = parameter.allow_filename_only === true;
@@ -140,20 +279,27 @@ export class EvidenceMatcher {
     }
 
     // Context snippet construction
-    const matchedKw = parameter.keywords.find(kw => textLower.includes(kw.toLowerCase())) || parameter.keywords[0];
-    const kwIdx = textLower.indexOf(matchedKw.toLowerCase());
+    const matchedKw = parameter.keywords.find(kw => textLower.includes(kw.toLowerCase())) || parameter.keywords[0] || '';
+    const kwIdx = matchedKw ? textLower.indexOf(matchedKw.toLowerCase()) : -1;
     let snippet = isFilenameOnly
       ? `Filename candidate match: '${filename}'. Document body content did not match parameter keywords.`
-      : `Matched evidence keyword: '${matchedKw}'`;
+      : (matchedKw ? `Matched evidence keyword: '${matchedKw}'` : `Matched document evidence for ${parameter.id}`);
     if (kwIdx !== -1) {
       const start = Math.max(0, kwIdx - 50);
       const end = Math.min(text.length, kwIdx + matchedKw.length + 80);
       snippet = `...${text.substring(start, end).replace(/[\r\n]+/g, ' ')}...`;
     }
 
+    const validationStatus = validated ? 'VALIDATED' : (isFilenameOnly ? 'FILENAME_ONLY' : 'REJECTED');
+
     const extractedFields: Record<string, any> = {
       ...valRes.extractedFields,
       raw_text: text,
+      document_domain: docDomain,
+      control_domain: targetDomain,
+      domain_match: isDomainCompatible,
+      source_type: sourceClass.sourceType,
+      validation_status: validationStatus,
       matched_keywords_count: matchedKeywordsInContent + matchedKeywordsInFilename,
       validation_reason: valRes.validationReason,
       missing_mandatory_fields: valRes.missingMandatoryFields,
@@ -188,6 +334,12 @@ export class EvidenceMatcher {
       filename,
       path: filePath,
       evidence_type: valRes.detectedEvidenceType,
+      document_domain: docDomain,
+      control_domain: targetDomain,
+      domain_match: isDomainCompatible,
+      source_type: sourceClass.sourceType,
+      validation_status: validationStatus,
+      validation_reason: valRes.validationReason,
       relevance: Number(relevance.toFixed(2)),
       extracted_fields: extractedFields,
       snippet,
@@ -244,4 +396,121 @@ export class EvidenceMatcher {
       type
     };
   }
+}
+
+/**
+ * Calculates a multi-factor priority score for an evidence candidate according to the
+ * Evidence Prioritization Rule:
+ * 1. Valid domain match (highest weight: +10000)
+ * 2. Valid mandatory structured fields (validated === true & missing_fields === 0: +5000)
+ * 3. Operational implementation evidence where required (+2500)
+ * 4. Valid entity correlation (+1500)
+ * 5. Valid semantic dates where required (+1000)
+ * 6. Evidence completeness (number of valid structured fields: +100 each)
+ * 7. Confidence / baseline relevance (+10 to +100)
+ * Generic keyword similarity has lowest priority (+1 to +10)
+ */
+export function calculateEvidencePriority(
+  evidence?: EvidenceItem | null,
+  parameter?: AuditParameter,
+  subRequirementDomain?: string
+): number {
+  if (!evidence) return 0;
+  let score = 0;
+  const fields = evidence.extracted_fields || {};
+  const docDomain = evidence.document_domain || fields.document_domain;
+  const targetDomain = subRequirementDomain || parameter?.domain;
+  const allowedDomains = parameter?.allowed_domains;
+
+  // 1. Valid domain match
+  if (targetDomain && docDomain && docDomain !== 'UNASSIGNED') {
+    if (docDomain === targetDomain) {
+      score += 10000;
+    } else if (allowedDomains && allowedDomains.includes(docDomain)) {
+      score += 8000;
+    } else {
+      score -= 5000; // Incompatible domain penalty
+    }
+  } else if (docDomain && docDomain !== 'UNASSIGNED') {
+    score += 2000;
+  }
+
+  // 2. Valid mandatory structured fields
+  if (evidence.validated || fields.validated) {
+    score += 5000;
+    const missing = (fields.missing_mandatory_fields || []) as string[];
+    if (missing.length === 0) {
+      score += 2000;
+    } else {
+      score -= missing.length * 500;
+    }
+  } else {
+    // Unvalidated or filename only
+    if (evidence.is_filename_only || fields.is_filename_only) {
+      score += 100;
+    }
+  }
+
+  // 3. Operational implementation evidence where required
+  const isImpl = fields.is_implementation === true ||
+    (evidence.evidence_type && (
+      evidence.evidence_type.includes('CONFIGURATION') ||
+      evidence.evidence_type.includes('LOG') ||
+      evidence.evidence_type.includes('REPORT') ||
+      evidence.evidence_type.includes('EXPORT')
+    ));
+  const isPolicy = fields.is_policy === true;
+
+  if (parameter?.distinguish_policy || parameter?.logic === 'AND') {
+    if (subRequirementDomain?.includes('CONFIG') || subRequirementDomain?.includes('IMPLEMENTATION')) {
+      if (isImpl && !isPolicy) score += 2500;
+      else if (isPolicy && !isImpl) score -= 1500;
+    } else if (subRequirementDomain?.includes('POLICY')) {
+      if (isPolicy) score += 2500;
+    }
+  } else if (isImpl) {
+    score += 1000;
+  }
+
+  // 3.5 Format-based priority boost (CSV/XLS/Screenshots > PDF > TXT)
+  const fnExt = (evidence.filename || '').toLowerCase();
+  if (fnExt.endsWith('.csv') || fnExt.endsWith('.xlsx') || fnExt.endsWith('.xls')) {
+    score += 500;
+  } else if (fnExt.endsWith('.png') || fnExt.endsWith('.jpg') || fnExt.endsWith('.jpeg')) {
+    score += 400;
+  } else if (fnExt.endsWith('.pdf')) {
+    score += 100;
+  }
+
+  // 4. Valid entity correlation
+  if (fields.entityMatch || fields.person_name || fields.agent_id || fields.employee_id) {
+    score += 1500;
+  }
+
+  // 5. Valid semantic dates where required
+  if (fields.issue_date || fields.effective_date || fields.drill_date || (fields.all_dates && fields.all_dates.length > 0)) {
+    score += 1000;
+  }
+
+  // 6. Evidence completeness (number of structured fields extracted)
+  const structuredFieldKeys = [
+    'person_name', 'agent_id', 'employee_id', 'certificate_number',
+    'policy_no', 'gstin', 'shops_registration_no', 'epfo_code', 'esic_code',
+    'issue_date', 'effective_date', 'expiry_date', 'drill_date', 'acknowledgement_number'
+  ];
+  let fieldCount = 0;
+  for (const k of structuredFieldKeys) {
+    if (fields[k]) fieldCount++;
+  }
+  score += fieldCount * 100;
+
+  // 7. Confidence & relevance
+  const conf = evidence.confidence || fields.confidence || 0.5;
+  score += conf * 100;
+
+  // Generic keyword similarity lowest priority
+  const kwMatches = (fields.matched_keywords_count as number) || 1;
+  score += Math.min(10, kwMatches);
+
+  return score;
 }

@@ -1,10 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { createRequire } from 'node:module';
 import { BaseExtractor, ExtractionResult, TableData } from './base.js';
-
-const require = createRequire(import.meta.url);
-const pdf = require('pdf-parse');
+import { PDFParse } from 'pdf-parse';
 
 export class PDFExtractor extends BaseExtractor {
   public canHandle(filePath: string): boolean {
@@ -21,7 +18,7 @@ export class PDFExtractor extends BaseExtractor {
 
     const stats = fs.statSync(filePath);
     const maxBytes = maxFileSizeMB * 1024 * 1024;
-
+    
     if (stats.size > maxBytes) {
       warnings.push(`File size (${stats.size} bytes) exceeds configured limit (${maxFileSizeMB} MB)`);
       return {
@@ -46,16 +43,18 @@ export class PDFExtractor extends BaseExtractor {
     let pdfInfo: any = {};
 
     try {
-      const parsedPdf = await pdf(fileBuffer);
-      pdfText = parsedPdf.text || '';
-      pageCount = parsedPdf.numpages || 0;
-      pdfInfo = parsedPdf.info || {};
+      const parser = new PDFParse({ data: fileBuffer });
+      const textResult = await parser.getText();
+      const infoResult = await parser.getInfo();
+      pdfText = textResult.text || '';
+      pageCount = textResult.total || 0;
+      pdfInfo = infoResult.info || {};
     } catch (err: any) {
       warnings.push(`PDF parse error: ${err.message || 'Corrupt or encrypted PDF file'}`);
     }
 
     const rawPdfStr = fileBuffer.toString('latin1');
-
+    
     // Fallback: If pdf-parse returned empty text, extract text streams (Tj operators)
     if (!pdfText.trim()) {
       const streamMatches = rawPdfStr.match(/\(([^()]+)\)\s*Tj/g);
@@ -68,12 +67,12 @@ export class PDFExtractor extends BaseExtractor {
       structure.hasJavaScript = true;
       warnings.push('PDF contains interactive JavaScript actions.');
     }
-
+    
     if (/\/Launch\b|\/Action\s*\/Launch/.test(rawPdfStr)) {
       structure.hasLaunchActions = true;
       warnings.push('PDF contains external application Launch actions.');
     }
-
+    
     if (/\/EmbeddedFiles\b|\/EF\b/.test(rawPdfStr)) {
       structure.hasEmbeddedFiles = true;
       embeddedObjects.push('Embedded PDF Attachments');
@@ -84,7 +83,7 @@ export class PDFExtractor extends BaseExtractor {
       structure.isEncrypted = true;
       warnings.push('PDF object encryption stream detected.');
     }
-
+    
     if (/\/Annots\b/.test(rawPdfStr)) {
       structure.hasAnnotations = true;
     }
@@ -98,7 +97,7 @@ export class PDFExtractor extends BaseExtractor {
     }
 
     structure.pageCount = pageCount;
-
+    
     const textHeader = [
       `PDF Document: ${path.basename(filePath)}`,
       pdfInfo.Title ? `Title: ${pdfInfo.Title}` : '',
@@ -108,6 +107,7 @@ export class PDFExtractor extends BaseExtractor {
     ].filter(Boolean).join('\n');
 
     let fullText = `${textHeader}\n${pdfText}`;
+    
     const { RESOURCE_LIMITS } = await import('../resourceLimits.js');
     if (fullText.length > RESOURCE_LIMITS.maxExtractedTextBytes) {
       fullText = fullText.substring(0, RESOURCE_LIMITS.maxExtractedTextBytes);

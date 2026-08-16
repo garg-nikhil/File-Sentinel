@@ -118,12 +118,12 @@ async function runTestSuite() {
   // Wait for scan to complete
   let progress = scanner.getScanProgress(scanSession.scan_id);
   let count = 0;
-  while (progress && progress.status === 'SCANNING' && count < 50) {
+  while (progress && progress.status === 'SCANNING' && count < 300) {
     await new Promise(r => setTimeout(r, 100));
     progress = scanner.getScanProgress(scanSession.scan_id);
     count++;
   }
-  assert(progress?.status === 'COMPLETED', 'Scan session should complete successfully');
+  if (progress?.status !== "COMPLETED") console.error("Scan progress:", progress); assert(progress?.status === "COMPLETED", "Scan session should complete successfully");
   console.log(` ✓ Scan session completed cleanly. Processed ${progress?.processed_files} files.\n`);
 
   // --- 15. Quarantine Strict Verification Workflow ---

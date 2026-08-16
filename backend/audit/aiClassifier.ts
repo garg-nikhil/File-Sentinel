@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { AIRecommendation, AuditParameter } from './models.js';
 
+let quotaExhaustedUntil = 0;
+
 export async function evaluateEvidenceWithGemini(
   filename: string,
   extractedText: string,
@@ -8,6 +10,11 @@ export async function evaluateEvidenceWithGemini(
 ): Promise<AIRecommendation | null> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    return null;
+  }
+
+  // Circuit breaker: skip if recently rate limited / quota exhausted
+  if (Date.now() < quotaExhaustedUntil) {
     return null;
   }
 
@@ -37,7 +44,7 @@ Analyze whether it is a policy document vs technical/operational implementation 
 Note: You are providing an AI recommendation only. The deterministic audit engine calculates the final score.`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-3.6-flash',
+      model: 'gemini-3.7-flash',
       contents: prompt,
       config: {
         systemInstruction: 'You are FileSentinel Audit AI, an objective regulatory compliance analyst. Perform precise evidence classification according to strict compliance standards.',
@@ -81,8 +88,15 @@ Note: You are providing an AI recommendation only. The deterministic audit engin
       recommended_status: (parsed.recommended_status || 'REVIEW') as any,
       confidence: typeof parsed.confidence === 'number' ? parsed.confidence : 0.80
     };
-  } catch (err) {
-    console.warn('[Audit AI] Gemini evidence evaluation skipped/failed:', err);
+  } catch (err: any) {
+    const errMsg = err?.message || String(err);
+    const isRateLimit = errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('Quota exceeded') || err?.status === 429 || errMsg.includes('503') || errMsg.includes('UNAVAILABLE') || err?.status === 503;
+    if (isRateLimit) {
+      quotaExhaustedUntil = Date.now() + 60000; // Cooldown for 60 seconds
+      console.warn('[Audit AI] Gemini rate limit/quota reached (429). Pausing AI evidence evaluations for 60s; relying on deterministic engine.');
+    } else {
+      console.warn('[Audit AI] Gemini evidence evaluation skipped:', errMsg);
+    }
     return null;
   }
 }

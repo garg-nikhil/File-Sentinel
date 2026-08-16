@@ -389,8 +389,8 @@ export class FileScannerEngine {
               INSERT INTO files (
                 file_id, scan_id, path, filename, extension, size, sha256,
                 risk_score, classification, scan_status, created_at, modified_at,
-                extracted_text_preview, metadata_json, warnings_json
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', ?, ?)
+                extracted_text_preview, extracted_text, metadata_json, warnings_json
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', '', ?, ?)
             `);
             fileStmt.run(
               fileId,
@@ -473,8 +473,8 @@ export class FileScannerEngine {
             INSERT INTO files (
               file_id, scan_id, path, filename, extension, size, sha256,
               risk_score, classification, scan_status, created_at, modified_at,
-              extracted_text_preview, metadata_json, warnings_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              extracted_text_preview, extracted_text, metadata_json, warnings_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           `);
           fileStmt.run(
             fileId,
@@ -490,6 +490,7 @@ export class FileScannerEngine {
             stats.birthtime.toISOString(),
             stats.mtime.toISOString(),
             text.substring(0, 500),
+            text,
             JSON.stringify(metadata),
             JSON.stringify(warnings)
           );
@@ -529,6 +530,16 @@ export class FileScannerEngine {
     }
 
     if (session.status !== 'CANCELLED' && session.status !== 'SCAN_LIMIT_EXCEEDED') {
+      try {
+        session.current_file = 'Evaluating compliance...';
+        const { EvidenceEngine } = await import('./audit/evidenceEngine.js');
+        const evidenceEngine = new EvidenceEngine(this.db);
+        await evidenceEngine.runAuditScanForSession(scanId);
+      } catch(err) {
+        console.error(`[Scan Engine] Audit evaluation failed for scan ${scanId}:`, err);
+      } finally {
+        session.current_file = undefined;
+      }
       session.status = 'COMPLETED';
     }
     session.end_time = new Date().toISOString();
