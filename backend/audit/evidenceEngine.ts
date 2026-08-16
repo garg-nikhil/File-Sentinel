@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import { defaultRegistry } from '../extractors/registry.js';
 import { INITIAL_AUDIT_CHECKLIST } from './checklist.js';
 import { DateEvaluator } from './dateEvaluator.js';
-import { EvidenceMatcher, calculateEvidencePriority } from './evidenceMatcher.js';
+import { EvidenceMatcher, calculateEvidencePriority, enrichEvidenceItemWithMetricsAndRole } from './evidenceMatcher.js';
 import { AuditEvaluator } from './evaluator.js';
 import { evaluateEvidenceWithGemini } from './aiClassifier.ts';
 import { AuditScoringEngine } from './scoring.js';
@@ -35,7 +35,8 @@ export class EvidenceEngine {
     auditDate: string = new Date().toISOString().split('T')[0],
     agencyName: string = 'Primary Telecalling & Collection Agency',
     auditorName: string = 'Automated Audit System',
-    customChecklist?: AuditParameter[]
+    customChecklist?: AuditParameter[],
+    aiPrivacyMode: 'OFF' | 'REDACTED_SNIPPETS' | 'FULL_TEXT' = 'OFF'
   ): Promise<AuditSession> {
     const auditId = `AUDIT-${crypto.randomUUID().substring(0, 8)}`;
     const activeChecklist = customChecklist || INITIAL_AUDIT_CHECKLIST;
@@ -56,7 +57,7 @@ export class EvidenceEngine {
       }
     }
 
-    return this.evaluateChecklist(auditId, fileExtractions, activeChecklist, auditDate, agencyName, auditorName);
+    return this.evaluateChecklist(auditId, fileExtractions, activeChecklist, auditDate, agencyName, auditorName, undefined, aiPrivacyMode);
   }
 
   /**
@@ -106,7 +107,8 @@ export class EvidenceEngine {
     auditDate: string,
     agencyName: string,
     auditorName: string,
-    scanId?: string
+    scanId?: string,
+    aiPrivacyMode: 'OFF' | 'REDACTED_SNIPPETS' | 'FULL_TEXT' = 'OFF'
   ): Promise<AuditSession> {
     // Evaluate each parameter against all documents
     const parameterResults: AuditParameterResult[] = [];
@@ -130,27 +132,44 @@ export class EvidenceEngine {
 
       // Sort evidence by multi-factor candidate priority
       matchedEvidence.sort((a, b) => calculateEvidencePriority(b, param) - calculateEvidencePriority(a, param));
+      const enrichedEvidence = matchedEvidence.map((ev, index) => {
+        const isPrimary = index === 0 && ev.validated;
+        const isDuplicateOrParallel = index > 0 && ev.validated;
+        return enrichEvidenceItemWithMetricsAndRole(ev, param, undefined, isPrimary, isDuplicateOrParallel);
+      });
 
       // Deterministic Evaluation
-      const result = this.evaluator.evaluateParameter(param, matchedEvidence, auditDate);
+      const result = this.evaluator.evaluateParameter(param, enrichedEvidence, auditDate);
 
-      // Optional Gemini AI Assistance if evidence is found and review/assistance is required
-      if (matchedEvidence.length > 0 && result.status !== 'PASS') {
-        const topEvidence = matchedEvidence[0];
-        const topFile = fileExtractions.find(f => f.fileId === topEvidence.file_id);
-        if (topFile) {
-          try {
-            const aiRec = await evaluateEvidenceWithGemini(
-              topEvidence.filename,
-              topFile.extraction.text || '',
-              param
-            );
-            if (aiRec) {
-              result.ai_recommendation = aiRec;
-            }
-          } catch {
-            // Silently fall back to deterministic evaluation result
+      // Optional Gemini AI Assistance
+      if (aiPrivacyMode !== 'OFF' && result.evidence_set && (result.evidence_set.primaryEvidence || result.evidence_set.supportingEvidence.length > 0)) {
+        try {
+          const evidenceForAi = {
+             primary: result.evidence_set.primaryEvidence,
+             supporting: result.evidence_set.supportingEvidence,
+             contradictory: result.evidence_set.contradictoryEvidence
+          };
+          
+          let aiText = '';
+          if (aiPrivacyMode === 'FULL_TEXT') {
+            const topFile = fileExtractions.find(f => f.fileId === result.evidence_set?.primaryEvidence?.file_id);
+            aiText = topFile?.extraction?.text || '';
+          } else {
+             aiText = JSON.stringify(evidenceForAi, null, 2);
           }
+
+          const filename = result.evidence_set?.primaryEvidence?.filename || 'aggregated_evidence.json';
+
+          const aiRec = await evaluateEvidenceWithGemini(
+            filename,
+            aiText,
+            param
+          );
+          if (aiRec) {
+            result.ai_recommendation = aiRec;
+          }
+        } catch {
+          // Silently fall back to deterministic evaluation result
         }
       }
 
@@ -270,6 +289,50 @@ export class EvidenceEngine {
 
       if (session.parameter_results) {
         for (const res of session.parameter_results) {
+
+          // Sanitize evidence before saving to DB
+          const sanitizedEvidence = res.evidence.map(e => {
+            const safeItem = { ...e };
+            if (safeItem.extracted_fields) {
+               safeItem.extracted_fields = { ...safeItem.extracted_fields };
+               delete safeItem.extracted_fields.raw_text;
+               delete safeItem.extracted_fields.fullText;
+               delete safeItem.extracted_fields.documentText;
+               delete safeItem.extracted_fields.extractedText;
+               delete safeItem.extracted_fields.text;
+            }
+            if (safeItem.structured_fields) {
+               safeItem.structured_fields = { ...safeItem.structured_fields };
+               delete safeItem.structured_fields.raw_text;
+               delete safeItem.structured_fields.fullText;
+               delete safeItem.structured_fields.documentText;
+               delete safeItem.structured_fields.extractedText;
+               delete safeItem.structured_fields.text;
+            }
+            return safeItem;
+          });
+
+          // Also sanitize evidence_set
+          let sanitizedEvidenceSet = undefined;
+          if (res.evidence_set) {
+            const sanitizeList = (list) => list.map(e => {
+               const safeItem = { ...e };
+               if (safeItem.extracted_fields) {
+                  safeItem.extracted_fields = { ...safeItem.extracted_fields };
+                  delete safeItem.extracted_fields.raw_text;
+               }
+               return safeItem;
+            });
+            sanitizedEvidenceSet = {
+               ...res.evidence_set,
+               primaryEvidence: res.evidence_set.primaryEvidence ? sanitizeList([res.evidence_set.primaryEvidence])[0] : null,
+               supportingEvidence: sanitizeList(res.evidence_set.supportingEvidence || []),
+               reviewEvidence: sanitizeList(res.evidence_set.reviewEvidence || []),
+               contradictoryEvidence: sanitizeList(res.evidence_set.contradictoryEvidence || []),
+               rejectedCandidates: sanitizeList(res.evidence_set.rejectedCandidates || [])
+            };
+          }
+
           paramStmt.run(
             session.audit_id,
             res.parameter_id,
@@ -280,7 +343,7 @@ export class EvidenceEngine {
             res.max_score,
             res.policy_status || null,
             res.pv_status || null,
-            JSON.stringify(res.evidence),
+            JSON.stringify({ evidence: sanitizedEvidence, evidence_set: sanitizedEvidenceSet }),
             res.reason,
             JSON.stringify(res.missing_requirements),
             JSON.stringify(res.warnings),

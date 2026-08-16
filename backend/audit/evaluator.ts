@@ -1,3 +1,4 @@
+import { EvidenceAggregator } from './evidenceAggregator.js';
 import { AuditParameter, AuditParameterResult, EvidenceItem, PolicyImplementationStatus, PoliceVerificationStatus } from './models.js';
 import { DateEvaluator } from './dateEvaluator.js';
 import { CompoundEvaluator } from './compoundEvaluator.js';
@@ -14,6 +15,9 @@ export class AuditEvaluator {
   ): AuditParameterResult {
     // Sort evidence candidates by deterministic priority
     evidenceItems = [...evidenceItems].sort((a, b) => calculateEvidencePriority(b, parameter) - calculateEvidencePriority(a, parameter));
+    
+    const { evidenceSet, hasContradiction, hasValidated } = EvidenceAggregator.aggregate(parameter, evidenceItems);
+
 
     // COMPOUND / SUB-CONTROL EVALUATION DELEGATION
     const isCompound = Boolean(
@@ -63,6 +67,7 @@ export class AuditEvaluator {
         score_earned: 0,
         max_score: this.calculateParameterMaxScore(parameter),
         evidence: evidenceItems,
+        evidence_set: evidenceSet,
         reason: `Candidate evidence discovered based on filename ('${evidenceItems[0].filename}'), but document body content did not match parameter requirements or pass content validation. Filename-only matches cannot satisfy audit controls without validated body content.`,
         missing_requirements: ['Validated document body content'],
         warnings: ['Filename-only match detected (potential filename spoofing)', ...warnings]
@@ -81,6 +86,7 @@ export class AuditEvaluator {
         score_earned: 0,
         max_score: this.calculateParameterMaxScore(parameter),
         evidence: evidenceItems,
+        evidence_set: evidenceSet,
         reason: `Candidate evidence matched keywords, but failed domain evidence validation rules. Generic keyword matches cannot satisfy audit controls without required structured fields.`,
         missing_requirements: ['Structured validation of required fields'],
         warnings: ['Evidence failed structured content validation', ...warnings]
@@ -109,6 +115,7 @@ export class AuditEvaluator {
         score_earned: 0,
         max_score: this.calculateParameterMaxScore(parameter),
         evidence: evidenceItems,
+        evidence_set: evidenceSet,
         reason: `Documentary evidence identified (${evidenceItems.length} file(s)), but physical or behavioral compliance requires auditor verification.`,
         missing_requirements: [],
         warnings: ['Requires physical or human auditor verification', ...warnings]
@@ -136,6 +143,7 @@ export class AuditEvaluator {
           max_score: this.calculateParameterMaxScore(parameter),
           policy_status: policyStatus,
           evidence: evidenceItems,
+        evidence_set: evidenceSet,
           reason: `Policy document found, but no technical or operational implementation evidence (e.g. system screenshots, GPO/DLP export, audit logs) was found. Policy presence alone cannot establish compliance.`,
           missing_requirements: ['Operational implementation evidence (system config, screenshot, audit dump)'],
           warnings: ['Policy document alone is insufficient to pass', ...warnings]
@@ -146,7 +154,7 @@ export class AuditEvaluator {
     // 6. PARAMETER SPECIFIC EVALUATION RULES
     // ZTI-005 Police Verification (handles both valid verified report and proof of application)
     if (parameter.id === 'ZTI-005') {
-      return this.evaluatePoliceVerification(parameter, evidenceItems, auditDate, warnings);
+      return this.evaluatePoliceVerification(parameter, evidenceItems, auditDate, warnings, evidenceSet);
     }
 
     // IPM-008 Fire Drill (Recency check: conducted within the latest 1 year relative to audit date)
@@ -169,6 +177,7 @@ export class AuditEvaluator {
             score_earned: 0,
             max_score: this.calculateParameterMaxScore(parameter),
             evidence: evidenceItems,
+        evidence_set: evidenceSet,
             reason: `Latest fire drill date (${drillDate}) is older than 1 year relative to audit date (${auditDate}).`,
             missing_requirements: ['Fire drill conducted within the last 12 months'],
             warnings: ['Fire drill date expired', ...warnings]
@@ -183,6 +192,7 @@ export class AuditEvaluator {
             score_earned: this.calculateParameterMaxScore(parameter),
             max_score: this.calculateParameterMaxScore(parameter),
             evidence: evidenceItems,
+        evidence_set: evidenceSet,
             reason: `Fire drill conducted on ${drillDate} verified within the required 1-year period relative to audit date (${auditDate}).`,
             missing_requirements: [],
             warnings
@@ -198,6 +208,7 @@ export class AuditEvaluator {
           score_earned: 0,
           max_score: this.calculateParameterMaxScore(parameter),
           evidence: evidenceItems,
+        evidence_set: evidenceSet,
           reason: `Fire drill report present but drill date could not be verified. Auditor review required to confirm drill was conducted within the past year.`,
           missing_requirements: ['Explicit drill date on report'],
           warnings: ['Drill date missing from evidence', ...warnings]
@@ -223,6 +234,7 @@ export class AuditEvaluator {
             score_earned: 0,
             max_score: this.calculateParameterMaxScore(parameter),
             evidence: evidenceItems,
+        evidence_set: evidenceSet,
             reason: `Time-bound requirement expired on ${primaryExpiry} relative to audit date ${auditDate}.`,
             missing_requirements: ['Active unexpired document'],
             warnings: ['Document expiry date has passed', ...warnings]
@@ -238,6 +250,7 @@ export class AuditEvaluator {
           score_earned: 0,
           max_score: this.calculateParameterMaxScore(parameter),
           evidence: evidenceItems,
+        evidence_set: evidenceSet,
           reason: `Expiration date is required for time-bound control '${parameter.parameter}', but no explicit expiry date was extracted from evidence. Auditor review required.`,
           missing_requirements: ['Explicit expiration date on evidence document'],
           warnings: ['Expiry date required but missing from evidence', ...warnings]
@@ -247,11 +260,29 @@ export class AuditEvaluator {
 
     // COMPOUND / SUB-CONTROL EVALUATION
     if (parameter.logic === 'AND' && parameter.sub_controls) {
-      return this.evaluateAndSubControls(parameter, evidenceItems, warnings);
+      return this.evaluateAndSubControls(parameter, evidenceItems, warnings, evidenceSet);
     }
 
     if (parameter.logic === 'GROUP' && parameter.sub_controls) {
-      return this.evaluateGroupSubControls(parameter, evidenceItems, warnings);
+      return this.evaluateGroupSubControls(parameter, evidenceItems, warnings, evidenceSet);
+    }
+
+    if (hasContradiction) {
+      const maxScore = this.calculateParameterMaxScore(parameter);
+      return {
+        parameter_id: parameter.id,
+        parameter,
+        status: 'REVIEW',
+        confidence: 0.80,
+        fatal: parameter.fatal,
+        score_earned: 0,
+        max_score: maxScore,
+        evidence: evidenceItems,
+        evidence_set: evidenceSet,
+        reason: 'Conflicting operational evidence detected. Auditor review required.',
+        missing_requirements: [],
+        warnings: ['Contradictory evidence detected', ...warnings]
+      };
     }
 
     // DEFAULT PASS STATUS
@@ -265,6 +296,7 @@ export class AuditEvaluator {
       score_earned: maxScore,
       max_score: maxScore,
       evidence: evidenceItems,
+        evidence_set: evidenceSet,
       reason: `Valid acceptable documentary evidence identified satisfying parameter requirements.`,
       missing_requirements: [],
       warnings
@@ -278,7 +310,8 @@ export class AuditEvaluator {
     parameter: AuditParameter,
     evidenceItems: EvidenceItem[],
     auditDate: string,
-    warnings: string[]
+    warnings: string[],
+    evidenceSet?: any
   ): AuditParameterResult {
     const combinedText = evidenceItems.map(e => `${e.filename} ${e.extracted_fields?.raw_text || e.snippet}`).join(' ').toLowerCase();
 
@@ -326,6 +359,7 @@ export class AuditEvaluator {
       max_score: maxScore,
       pv_status: pvStatus,
       evidence: evidenceItems,
+        evidence_set: evidenceSet,
       reason,
       missing_requirements: status === 'FAIL' ? ['Valid PV or proof of application'] : [],
       warnings
@@ -338,7 +372,8 @@ export class AuditEvaluator {
   private evaluateAndSubControls(
     parameter: AuditParameter,
     evidenceItems: EvidenceItem[],
-    warnings: string[]
+    warnings: string[],
+    evidenceSet?: any
   ): AuditParameterResult {
     const maxScore = this.calculateParameterMaxScore(parameter);
     const subStatuses: Record<string, 'PASS' | 'FAIL' | 'REVIEW'> = {};
@@ -369,6 +404,7 @@ export class AuditEvaluator {
       max_score: maxScore,
       sub_control_statuses: subStatuses,
       evidence: evidenceItems,
+        evidence_set: evidenceSet,
       reason: allPassed
         ? `All compound sub-requirements (${parameter.sub_controls?.join(', ')}) satisfied.`
         : `Compound requirement incomplete. Missing: ${missingSubs.join(', ')}.`,
@@ -383,7 +419,8 @@ export class AuditEvaluator {
   private evaluateGroupSubControls(
     parameter: AuditParameter,
     evidenceItems: EvidenceItem[],
-    warnings: string[]
+    warnings: string[],
+    evidenceSet?: any
   ): AuditParameterResult {
     const maxScore = this.calculateParameterMaxScore(parameter);
     const subStatuses: Record<string, 'PASS' | 'FAIL' | 'REVIEW'> = {};
@@ -421,6 +458,7 @@ export class AuditEvaluator {
       max_score: maxScore,
       sub_control_statuses: subStatuses,
       evidence: evidenceItems,
+        evidence_set: evidenceSet,
       reason: `Evaluated group controls (${passedCount}/${totalSubs} satisfied). ${missingSubs.length > 0 ? 'Missing: ' + missingSubs.join(', ') : ''}`,
       missing_requirements: missingSubs,
       warnings

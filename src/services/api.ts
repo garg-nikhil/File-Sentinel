@@ -33,11 +33,11 @@ export const api = {
     return res.json();
   },
 
-  async startScan(rootPath: string): Promise<ScanSession> {
+  async startScan(rootPaths: string | string[]): Promise<ScanSession> {
     const res = await fetch('/api/scans', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root_path: rootPath })
+      body: JSON.stringify({ root_paths: Array.isArray(rootPaths) ? rootPaths : [rootPaths] })
     });
     if (!res.ok) {
       const err = await res.json();
@@ -46,7 +46,7 @@ export const api = {
     return res.json();
   },
 
-  async uploadDirectory(files: File[], onProgress?: (pct: number) => void): Promise<string> {
+  async uploadDirectory(files: File[], onProgress?: (pct: number) => void): Promise<{ rootPath: string; fileCount: number; folderName: string }> {
     const formData = new FormData();
     const uploadId = 'scan_' + Math.random().toString(36).substring(2, 10);
     formData.append('uploadId', uploadId);
@@ -70,7 +70,13 @@ export const api = {
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
           const res = JSON.parse(xhr.responseText);
-          resolve(res.root_path);
+          const firstPath = files[0] && (files[0] as any).webkitRelativePath ? (files[0] as any).webkitRelativePath : files[0]?.name || 'Uploaded Folder';
+          const topFolder = firstPath.split('/')[0] || 'Uploaded Folder';
+          resolve({
+            rootPath: res.root_path,
+            fileCount: res.file_count || files.length,
+            folderName: topFolder
+          });
         } else {
           try {
             const err = JSON.parse(xhr.responseText);
@@ -164,6 +170,7 @@ export const api = {
   // --- AUDIT COMPLIANCE SERVICES ---
   async runAuditScan(params?: {
     target_dir?: string;
+    scan_roots?: string[];
     scan_id?: string;
     audit_date?: string;
     agency_name?: string;
@@ -238,6 +245,256 @@ export const api = {
   async retryCloudUpload(fileId: string) {
     const res = await fetch(`/api/cloud-uploads/retry/${fileId}`, {
       method: 'POST'
+    });
+    return res.json();
+  },
+
+  async getLicense() {
+    const res = await fetch('/api/license');
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || 'Failed to fetch license');
+    }
+    return res.json();
+  },
+
+  async getLicenseDevices() {
+    const res = await fetch('/api/license/devices');
+    return res.json();
+  },
+
+  async activateLicenseDevice(deviceId?: string) {
+    const res = await fetch('/api/license/devices/activate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: deviceId })
+    });
+    return res.json();
+  },
+
+  async deactivateLicenseDevice(deviceId: string) {
+    const res = await fetch('/api/license/devices/deactivate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: deviceId })
+    });
+    return res.json();
+  },
+
+  async getLicenseEvents() {
+    const res = await fetch('/api/license/events');
+    return res.json();
+  },
+
+  // --- PRIVACY-PRESERVING TELEMETRY SERVICES ---
+  async getScanTelemetryHistory(limit: number = 50, offset: number = 0) {
+    const res = await fetch(`/api/scans/history?limit=${limit}&offset=${offset}`);
+    return res.json();
+  },
+
+  async getScanTelemetryDetail(scanId: string) {
+    const res = await fetch(`/api/scans/${scanId}`);
+    return res.json();
+  },
+
+  async postScanTelemetry(payload: any) {
+    const res = await fetch('/api/telemetry/scans', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  async getTelemetryQueueStatus() {
+    const res = await fetch('/api/telemetry/queue/status');
+    return res.json();
+  },
+
+  async flushTelemetryQueue() {
+    const res = await fetch('/api/telemetry/queue/flush', {
+      method: 'POST'
+    });
+    return res.json();
+  },
+
+  // --- VENDOR CLOUD DASHBOARD API ---
+  async getCloudDashboardOverview() {
+    const res = await fetch('/api/cloud-dashboard/overview');
+    return res.json();
+  },
+
+  async getCloudComplianceTrend(limit: number = 30) {
+    const res = await fetch(`/api/cloud-dashboard/trend?limit=${limit}`);
+    return res.json();
+  },
+
+  async verifyCloudReport(queryId: string) {
+    const res = await fetch('/api/cloud-dashboard/verify-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query_id: queryId })
+    });
+    return res.json();
+  },
+
+  async getCloudOrganizationInfo() {
+    const res = await fetch('/api/cloud-dashboard/organization');
+    return res.json();
+  },
+
+  async getCloudSoftwareVersion() {
+    const res = await fetch('/api/cloud-dashboard/software-version');
+    return res.json();
+  },
+
+  async getCloudUsers() {
+    const res = await fetch('/api/users');
+    return res.json();
+  },
+
+  async createCloudUser(payload: { username: string; password: string; role: string }) {
+    const res = await fetch('/api/users/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  async toggleCloudUserDisable(userId: string) {
+    const res = await fetch(`/api/users/${userId}/toggle-disable`, {
+      method: 'POST'
+    });
+    return res.json();
+  },
+
+  async updateCloudUserRole(userId: string, role: string) {
+    const res = await fetch(`/api/users/${userId}/role`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role })
+    });
+    return res.json();
+  },
+
+  async removeCloudUser(userId: string) {
+    const res = await fetch(`/api/users/${userId}`, {
+      method: 'DELETE'
+    });
+    return res.json();
+  },
+
+  async getCloudDevices() {
+    const res = await fetch('/api/devices');
+    return res.json();
+  },
+
+  async revokeCloudDevice(deviceId: string) {
+    const res = await fetch(`/api/devices/${deviceId}/revoke`, {
+      method: 'POST'
+    });
+    return res.json();
+  },
+
+  // --- COMMERCIALIZATION PHASE 5: SUBSCRIPTION BILLING ---
+  async getBillingState(): Promise<import('../types').OrganizationBillingState> {
+    const res = await fetch('/api/billing/state');
+    return res.json();
+  },
+
+  async getBillingPlans(): Promise<import('../types').BillingPlanInfo[]> {
+    const res = await fetch('/api/billing/plans');
+    return res.json();
+  },
+
+  async createSubscriptionCheckout(payload: { plan_key: string; interval: 'MONTHLY' | 'ANNUAL'; email?: string }) {
+    const res = await fetch('/api/billing/checkout', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  async changeSubscriptionPlan(payload: { new_plan_key: string; interval: 'MONTHLY' | 'ANNUAL' }) {
+    const res = await fetch('/api/billing/change-plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  async cancelSubscription() {
+    const res = await fetch('/api/billing/cancel', {
+      method: 'POST'
+    });
+    return res.json();
+  },
+
+  // --- COMMERCIALIZATION PHASE 8: PRIVACY-FIRST DATA GOVERNANCE ---
+  async getPrivacyGovernance(): Promise<import('../types').GovernanceManifest> {
+    const res = await fetch('/api/privacy/governance');
+    return res.json();
+  },
+
+  async getTelemetryInspection(scanId: string): Promise<import('../types').TelemetryInspectionResult> {
+    const res = await fetch(`/api/privacy/telemetry-preview/${scanId}`);
+    return res.json();
+  },
+
+  async getRetentionPolicy(): Promise<import('../types').RetentionPolicy> {
+    const res = await fetch('/api/privacy/retention-policy');
+    return res.json();
+  },
+
+  async updateRetentionPolicy(payload: { cloud_metadata_retention_days: number; auto_purge_enabled?: boolean }) {
+    const res = await fetch('/api/privacy/retention-policy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  async purgeExpiredCloudTelemetry() {
+    const res = await fetch('/api/privacy/purge-cloud-telemetry', {
+      method: 'POST'
+    });
+    return res.json();
+  },
+
+  // --- COMMERCIALIZATION PHASE 9: CRYPTOGRAPHICALLY VERIFIABLE AUDIT REPORTS ---
+  async verifyReportPublic(reportId: string): Promise<import('../types').ReportVerificationResult> {
+    const res = await fetch(`/api/reports/verify/${encodeURIComponent(reportId)}`);
+    return res.json();
+  },
+
+  async registerAuditReport(payload: {
+    scan_id?: string;
+    audit_id?: string;
+    engine_version?: string;
+    checklist_version?: string;
+  }) {
+    const res = await fetch('/api/reports/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    return res.json();
+  },
+
+  async getAuditReportsList(): Promise<import('../types').StoredAuditReportItem[]> {
+    const res = await fetch('/api/reports/list');
+    return res.json();
+  },
+
+  async revokeAuditReport(reportId: string, reason: string) {
+    const res = await fetch(`/api/reports/revoke/${encodeURIComponent(reportId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason })
     });
     return res.json();
   }

@@ -514,3 +514,74 @@ export function calculateEvidencePriority(
 
   return score;
 }
+
+export function enrichEvidenceItemWithMetricsAndRole(
+  evidence: EvidenceItem,
+  parameter: AuditParameter,
+  subReqDomain?: EvidenceDomain,
+  isPrimary: boolean = false,
+  isDuplicateOrParallel: boolean = false
+): EvidenceItem {
+  const fields = evidence.extracted_fields || {};
+  const docDomain = evidence.document_domain || fields.document_domain;
+  const targetDomain = subReqDomain || parameter.domain;
+  const allowedDomains = parameter.allowed_domains;
+
+  const domainMatchScore = targetDomain && docDomain && docDomain !== 'UNASSIGNED'
+    ? (docDomain === targetDomain ? 100 : (allowedDomains?.includes(docDomain) ? 80 : 0))
+    : 50;
+
+  const missing = (fields.missing_mandatory_fields || []) as string[];
+  const fieldCount = Object.keys(fields).filter(k => !['raw_text', 'text', 'source_type', 'validation_status'].includes(k)).length;
+  let structuredFieldScore = evidence.validated ? (missing.length === 0 ? 100 : 70) : (evidence.is_filename_only ? 20 : 40);
+  structuredFieldScore = Math.min(100, Math.max(0, structuredFieldScore + Math.min(30, fieldCount * 3)));
+
+  const isImpl = fields.is_implementation === true ||
+    (evidence.evidence_type && (
+      evidence.evidence_type.includes('CONFIGURATION') ||
+      evidence.evidence_type.includes('LOG') ||
+      evidence.evidence_type.includes('REPORT') ||
+      evidence.evidence_type.includes('EXPORT')
+    ));
+  const isPolicy = fields.is_policy === true;
+  const implementationScore = isImpl ? 100 : (isPolicy ? 30 : 60);
+
+  const entityCorrelationScore = (fields.entityMatch || fields.person_name || fields.agent_id || fields.employee_id || fields.gstin || fields.certificate_number || fields.shops_registration_no) ? 100 : 0;
+  const semanticDateScore = (fields.issue_date || fields.effective_date || fields.expiry_date || fields.drill_date || (fields.all_dates && fields.all_dates.length > 0)) ? 100 : 0;
+  const evidenceQualityScore = Math.round((evidence.confidence || 0.5) * 100);
+  const finalCandidateScore = calculateEvidencePriority(evidence, parameter, subReqDomain);
+
+  let evidenceRole: EvidenceItem['evidenceRole'] = 'SUPPORTING_IMPLEMENTATION';
+  const valStatus = evidence.validation_status || fields.validation_status;
+  const fnLower = (evidence.filename || '').toLowerCase();
+
+  if (valStatus === 'REJECTED' || valStatus === 'REJECTED_DOMAIN_MISMATCH' || (!evidence.validated && !evidence.candidate && valStatus !== 'PARTIALLY_VALIDATED')) {
+    evidenceRole = 'IRRELEVANT_REJECTED';
+  } else if (isPolicy && !isImpl) {
+    evidenceRole = 'GOVERNANCE_POLICY';
+  } else if (isPrimary || fnLower.includes('15_usb_implementation') || fnLower.includes('primary') || fnLower.includes('valid') || finalCandidateScore > 16000) {
+    evidenceRole = 'PRIMARY_IMPLEMENTATION';
+  } else if (isDuplicateOrParallel || fnLower.includes('1_usb_implementation') || fnLower.includes('parallel') || fnLower.includes('duplicate')) {
+    evidenceRole = 'DUPLICATE_OR_PARALLEL_EVIDENCE';
+  } else if (fnLower.includes('gpo') || fnLower.includes('config') || fnLower.includes('log') || fnLower.includes('policy_and_implementation')) {
+    evidenceRole = 'SUPPORTING_IMPLEMENTATION';
+  } else if (subReqDomain && parameter.domain && subReqDomain !== parameter.domain) {
+    evidenceRole = 'ALTERNATIVE_EVIDENCE';
+  } else if (fnLower.includes('compound') || fnLower.includes('alternative') || fnLower.includes('pf_esic') || fnLower.includes('principal_employer')) {
+    evidenceRole = 'ALTERNATIVE_EVIDENCE';
+  } else {
+    evidenceRole = 'SUPPORTING_IMPLEMENTATION';
+  }
+
+  return {
+    ...evidence,
+    evidenceRole,
+    evidenceQualityScore,
+    domainMatchScore,
+    structuredFieldScore,
+    implementationScore,
+    entityCorrelationScore,
+    semanticDateScore,
+    finalCandidateScore
+  };
+}

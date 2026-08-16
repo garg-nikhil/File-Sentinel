@@ -56,16 +56,87 @@ export function enforceContentType(req: Request, res: Response, next: NextFuncti
   next();
 }
 
-// --- RATE LIMITER (In-Memory sliding window for API abuse prevention) ---
+// --- RATE LIMITER & PROGRESSIVE LOGIN THROTTLING ---
 interface RateRecord {
   timestamps: number[];
 }
 const rateLimits = new Map<string, RateRecord>();
 
-export function rateLimiter(options: { windowMs: number; max: number }) {
+// Progressive login throttling / lockout store
+interface LoginThrottleRecord {
+  failedAttempts: number;
+  lockoutUntil: number;
+  lastAttempt: number;
+}
+const loginThrottleMap = new Map<string, LoginThrottleRecord>();
+
+export function checkLoginThrottling(ipOrUsername: string): { allowed: boolean; remainingLockoutSeconds?: number; failedAttempts: number } {
+  const now = Date.now();
+  const record = loginThrottleMap.get(ipOrUsername);
+  if (!record) {
+    return { allowed: true, failedAttempts: 0 };
+  }
+
+  // If lockout expired, reset
+  if (record.lockoutUntil > 0) {
+    if (now < record.lockoutUntil) {
+      const remainingSec = Math.ceil((record.lockoutUntil - now) / 1000);
+      return { allowed: false, remainingLockoutSeconds: remainingSec, failedAttempts: record.failedAttempts };
+    } else {
+      // Lockout finished, decay attempts
+      record.failedAttempts = Math.max(0, record.failedAttempts - 3);
+      record.lockoutUntil = 0;
+    }
+  }
+
+  // Decay stale attempts (after 15 minutes of inactivity)
+  if (now - record.lastAttempt > 15 * 60 * 1000) {
+    record.failedAttempts = 0;
+  }
+
+  return { allowed: true, failedAttempts: record.failedAttempts };
+}
+
+export function recordFailedLogin(ipOrUsername: string): { locked: boolean; lockoutSeconds: number; attempts: number } {
+  const now = Date.now();
+  let record = loginThrottleMap.get(ipOrUsername);
+  if (!record) {
+    record = { failedAttempts: 0, lockoutUntil: 0, lastAttempt: now };
+    loginThrottleMap.set(ipOrUsername, record);
+  }
+
+  record.failedAttempts += 1;
+  record.lastAttempt = now;
+
+  let lockoutSeconds = 0;
+  // Progressive backoff:
+  // 5 failures -> 60s
+  // 8 failures -> 300s (5 mins)
+  // 12+ failures -> 900s (15 mins)
+  if (record.failedAttempts >= 12) {
+    lockoutSeconds = 900;
+  } else if (record.failedAttempts >= 8) {
+    lockoutSeconds = 300;
+  } else if (record.failedAttempts >= 5) {
+    lockoutSeconds = 60;
+  }
+
+  if (lockoutSeconds > 0) {
+    record.lockoutUntil = now + lockoutSeconds * 1000;
+    return { locked: true, lockoutSeconds, attempts: record.failedAttempts };
+  }
+
+  return { locked: false, lockoutSeconds: 0, attempts: record.failedAttempts };
+}
+
+export function recordSuccessfulLogin(ipOrUsername: string) {
+  loginThrottleMap.delete(ipOrUsername);
+}
+
+export function rateLimiter(options: { windowMs: number; max: number; keyGenerator?: (req: Request) => string }) {
   return (req: Request, res: Response, next: NextFunction) => {
     const ip = req.ip || req.socket.remoteAddress || 'unknown';
-    const key = `${ip}:${req.path}`;
+    const key = options.keyGenerator ? options.keyGenerator(req) : `${ip}:${req.baseUrl || ''}${req.path}`;
     const now = Date.now();
 
     let record = rateLimits.get(key);
@@ -78,7 +149,12 @@ export function rateLimiter(options: { windowMs: number; max: number }) {
     record.timestamps = record.timestamps.filter(t => now - t < options.windowMs);
 
     if (record.timestamps.length >= options.max) {
-      return res.status(429).json({ error: 'Too many requests, please try again later.' });
+      const retryAfter = Math.ceil((record.timestamps[0] + options.windowMs - now) / 1000);
+      res.setHeader('Retry-After', String(Math.max(1, retryAfter)));
+      return res.status(429).json({
+        error: 'Too many requests, please try again later.',
+        retry_after_seconds: Math.max(1, retryAfter)
+      });
     }
 
     record.timestamps.push(now);
@@ -86,11 +162,71 @@ export function rateLimiter(options: { windowMs: number; max: number }) {
   };
 }
 
-// --- VALIDATION HELPERS ---
+// --- CSRF PROTECTION (Custom Header & Origin Validation) ---
+export function csrfProtection(req: Request, res: Response, next: NextFunction) {
+  // State-changing requests (POST, PUT, PATCH, DELETE) require either:
+  // 1. Bearer token in Authorization header
+  // 2. Custom header (X-Requested-With or X-CSRF-Token)
+  // 3. Same-origin match
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+    // Exempt webhooks (they use cryptographic HMAC-SHA256 signature verification)
+    if (req.path.startsWith('/webhooks/') || req.path.startsWith('/api/webhooks/')) {
+      return next();
+    }
+
+    const authHeader = req.headers['authorization'];
+    const customHeader = req.headers['x-requested-with'] || req.headers['x-csrf-token'];
+    const origin = req.headers['origin'];
+    const host = req.headers['host'];
+
+    // If bearer auth is present, CSRF is mitigated
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      return next();
+    }
+
+    // If custom non-browser default header present, mitigate
+    if (customHeader) {
+      return next();
+    }
+
+    // Check origin vs host
+    if (origin && host) {
+      try {
+        const originUrl = new URL(origin);
+        if (originUrl.host === host) {
+          return next();
+        }
+      } catch {}
+    }
+
+    // If none of the above and in production, reject
+    if (process.env.NODE_ENV === 'production' && !authHeader) {
+      return res.status(403).json({ error: 'Forbidden: Missing CSRF token or authorization header' });
+    }
+  }
+  next();
+}
+
+// --- STRICT INPUT VALIDATORS ---
 const FILE_ID_REGEX = /^FILE-[a-zA-Z0-9_-]{4,32}$/;
+const SCAN_ID_REGEX = /^[a-zA-Z0-9_-]{4,64}$/;
+const ORG_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
+const DEVICE_ID_REGEX = /^[a-zA-Z0-9_-]{3,64}$/;
 
 export function isValidFileId(fileId: unknown): boolean {
   return typeof fileId === 'string' && FILE_ID_REGEX.test(fileId);
+}
+
+export function isValidScanId(scanId: unknown): boolean {
+  return typeof scanId === 'string' && SCAN_ID_REGEX.test(scanId);
+}
+
+export function isValidOrgId(orgId: unknown): boolean {
+  return typeof orgId === 'string' && ORG_ID_REGEX.test(orgId);
+}
+
+export function isValidDeviceId(deviceId: unknown): boolean {
+  return typeof deviceId === 'string' && DEVICE_ID_REGEX.test(deviceId);
 }
 
 export function sanitizePagination(limit: any, offset: any): { limit: number; offset: number } {

@@ -77,6 +77,7 @@ export interface ExtractedDateItem {
   sourceText: string;
   context?: string;
   confidence?: number;
+  classification?: 'VALIDATED' | 'PARTIALLY_VALIDATED' | 'REVIEW' | 'CONTRADICTORY' | 'NOT_RELEVANT';
 }
 
 export interface SubControlRequirement {
@@ -112,6 +113,7 @@ export interface SubControlResult {
   domain_match?: boolean;
   status: AuditParameterStatus;
   evidence: EvidenceItem[];
+  evidence_set?: ControlEvidenceSet;
   evidence_types?: string[];
   reason?: string;
   missing_requirements?: string[];
@@ -121,6 +123,7 @@ export interface SubControlResult {
   children?: SubControlResult[];
   sub_results?: SubControlResult[];
   confidence?: number;
+  classification?: 'VALIDATED' | 'PARTIALLY_VALIDATED' | 'REVIEW' | 'CONTRADICTORY' | 'NOT_RELEVANT';
   score_earned?: number;
   max_score?: number;
 }
@@ -154,6 +157,14 @@ export interface AuditParameter {
   evaluation_rules: string[];
   enabled: boolean;
 }
+
+export type EvidenceRole =
+  | 'PRIMARY_IMPLEMENTATION'
+  | 'SUPPORTING_IMPLEMENTATION'
+  | 'ALTERNATIVE_EVIDENCE'
+  | 'GOVERNANCE_POLICY'
+  | 'DUPLICATE_OR_PARALLEL_EVIDENCE'
+  | 'IRRELEVANT_REJECTED';
 
 export interface EvidenceItem {
   evidence_id: string;
@@ -201,6 +212,17 @@ export interface EvidenceItem {
   validated?: boolean;
   satisfiesControl?: boolean;
   confidence?: number;
+  classification?: 'VALIDATED' | 'PARTIALLY_VALIDATED' | 'REVIEW' | 'CONTRADICTORY' | 'NOT_RELEVANT';
+  evidenceRole?: EvidenceRole;
+  evidenceQualityScore?: number;
+  domainMatchScore?: number;
+  structuredFieldScore?: number;
+  implementationScore?: number;
+  entityCorrelationScore?: number;
+  semanticDateScore?: number;
+  finalCandidateScore?: number;
+  sha256?: string;
+  isDuplicateHash?: boolean;
 }
 
 export interface AIRecommendation {
@@ -237,6 +259,7 @@ export interface AuditParameterResult {
   sub_control_results?: SubControlResult[];
   children?: SubControlResult[];
   evidence: EvidenceItem[];
+  evidence_set?: ControlEvidenceSet;
   reason: string;
   missing_requirements: string[];
   warnings: string[];
@@ -251,6 +274,7 @@ export interface EntityEvidenceReference {
   filename: string;
   evidenceId?: string;
   confidence?: number;
+  classification?: 'VALIDATED' | 'PARTIALLY_VALIDATED' | 'REVIEW' | 'CONTRADICTORY' | 'NOT_RELEVANT';
   extractedName?: string;
   extractedAgentId?: string;
   extractedEmployeeId?: string;
@@ -401,3 +425,12 @@ export interface EvidenceGap {
 }
 
 export type AuditGap = EvidenceGap;
+
+export interface ControlEvidenceSet {
+  controlId: string;
+  primaryEvidence: EvidenceItem | null;
+  supportingEvidence: EvidenceItem[];
+  reviewEvidence: EvidenceItem[];
+  contradictoryEvidence: EvidenceItem[];
+  rejectedCandidates: EvidenceItem[];
+}

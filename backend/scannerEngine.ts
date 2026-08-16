@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { defaultRegistry } from './extractors/registry.js';
 import { ExtractionResult } from './extractors/base.js';
+import { PilotService } from './pilotService.js';
 import {
   AppSettings,
   Classification,
@@ -301,13 +302,15 @@ export class FileScannerEngine {
   }
 
   // --- SCAN ORCHESTRATION ---
-  public async startScan(rootPath: string, rules: Rule[], settings?: AppSettings): Promise<ScanSession> {
-    const scanId = `SCAN-${crypto.randomUUID().substring(0, 8)}`;
+  public async startScan(rootPaths: string | string[], rules: Rule[], settings?: AppSettings, orgId?: string, userId?: string, deviceId?: string): Promise<ScanSession> {
+    const pathsArray = Array.isArray(rootPaths) ? rootPaths : [rootPaths];
+    const rootPathStr = pathsArray.join(', ');
+    const scanId = `SCAN-${crypto.randomUUID()}`;
     const startTime = new Date().toISOString();
 
     const session: ScanSession = {
       scan_id: scanId,
-      root_path: rootPath,
+      root_path: rootPathStr,
       start_time: startTime,
       status: 'SCANNING',
       total_files: 0,
@@ -329,23 +332,33 @@ export class FileScannerEngine {
     const stmt = this.db.prepare(`
       INSERT INTO scans (
         scan_id, root_path, start_time, status, total_files, supported_files,
-        processed_files, error_count, critical_count, high_count, medium_count, low_count, safe_count
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        processed_files, error_count, critical_count, high_count, medium_count, low_count, safe_count,
+        org_id, user_id, device_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     stmt.run(
-      scanId, rootPath, startTime, 'SCANNING', 0, 0,
-      0, 0, 0, 0, 0, 0, 0
+      scanId, rootPathStr, startTime, 'SCANNING', 0, 0,
+      0, 0, 0, 0, 0, 0, 0,
+      orgId || null, userId || null, deviceId || null
     );
 
     // Run scanning in background async loop so API returns immediately
-    this.runScanTask(scanId, rootPath, rules, settings).catch(err => {
+    this.runScanTask(scanId, pathsArray, rules, settings, orgId, userId, deviceId).catch(err => {
       console.error(`[Scan Engine] Fatal error in scan ${scanId}:`, err);
     });
 
     return session;
   }
 
-  private async runScanTask(scanId: string, rootPath: string, rules: Rule[], settings?: AppSettings) {
+  private async runScanTask(
+    scanId: string,
+    pathsArray: string[],
+    rules: Rule[],
+    settings?: AppSettings,
+    orgId?: string,
+    userId?: string,
+    deviceId?: string
+  ) {
     const session = this.activeScans.get(scanId);
     if (!session) return;
 
@@ -354,8 +367,17 @@ export class FileScannerEngine {
 
     const { RESOURCE_LIMITS, withTimeout } = await import('./resourceLimits.js');
 
-    // Discover files up to maxScanDepth
-    const allDiscovered = this.discoverFiles(rootPath, maxScanDepth);
+    // Discover files across all paths up to maxScanDepth
+    const allDiscovered: string[] = [];
+    for (const rp of pathsArray) {
+      if (!rp || !rp.trim()) continue;
+      const discovered = this.discoverFiles(rp.trim(), maxScanDepth);
+      for (const d of discovered) {
+        if (!allDiscovered.includes(d)) {
+          allDiscovered.push(d);
+        }
+      }
+    }
     session.total_files = allDiscovered.length;
     session.supported_files = allDiscovered.length;
 
@@ -567,6 +589,53 @@ export class FileScannerEngine {
       session.safe_count,
       scanId
     );
+
+    try {
+      const pilotService = new PilotService(this.db);
+      const targetOrgId = orgId || 'org-default';
+      const targetUserId = userId || 'user-default';
+      const targetDeviceId = deviceId || 'dev-default';
+      const completedCount = (this.db.prepare("SELECT COUNT(*) as count FROM scans WHERE org_id = ? AND status = 'COMPLETED'").get(targetOrgId) as any)?.count || 0;
+      if (session.status === 'COMPLETED') {
+        pilotService.recordTelemetry('completed_scan', targetOrgId, targetUserId, targetDeviceId, { scan_id: scanId, total_files: session.total_files });
+        if (completedCount === 1) {
+          pilotService.recordTelemetry('first_scan', targetOrgId, targetUserId, targetDeviceId, { scan_id: scanId });
+        } else if (completedCount === 2) {
+          pilotService.recordTelemetry('second_scan', targetOrgId, targetUserId, targetDeviceId, { scan_id: scanId });
+        }
+      } else {
+        pilotService.recordTelemetry('failed_scan', targetOrgId, targetUserId, targetDeviceId, { scan_id: scanId, status: session.status });
+      }
+    } catch (e) {
+      console.warn('[ScannerEngine] Pilot telemetry error:', e);
+    }
+
+    // 3. Privacy-Preserving Telemetry Generation & Offline Queueing
+    if (settings?.telemetryEnabled !== false) {
+      try {
+        const { TelemetryService } = await import('./telemetry.js');
+        const telemetryService = new TelemetryService(this.db);
+        const telemetryPayload = telemetryService.buildTelemetryPayload(
+          scanId,
+          orgId || 'org-default',
+          userId || 'user-default',
+          deviceId || 'dev-default',
+          {
+            debugFilenamesEnabled: Boolean(settings?.debugFilenamesEnabled),
+            applicationVersion: '1.0.0',
+            engineVersion: '1.0.0',
+            checklistVersion: '2026.1'
+          }
+        );
+        if (telemetryPayload) {
+          telemetryService.enqueue(telemetryPayload);
+          telemetryService.flushQueue();
+        }
+      } catch (telemetryErr) {
+        // NON-BLOCKING INVARIANT: Telemetry failure must NEVER fail the local scan or audit results.
+        console.warn('[Telemetry] Non-blocking telemetry capture notice:', telemetryErr);
+      }
+    }
   }
 
   public getScanProgress(scanId: string): ScanSession | undefined {

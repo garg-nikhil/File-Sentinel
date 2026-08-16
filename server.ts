@@ -2,9 +2,17 @@ import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
 import { createApiRouter } from './backend/routes.js';
-import { securityHeaders, corsMiddleware, enforceContentType, rateLimiter, safeErrorHandler } from './backend/securityMiddleware.js';
+import { securityHeaders, corsMiddleware, enforceContentType, rateLimiter, csrfProtection, safeErrorHandler } from './backend/securityMiddleware.js';
+import { FileIntegrityMonitor } from './backend/fimService.js';
 
 async function startServer() {
+  const fimResult = FileIntegrityMonitor.verifyIntegrity();
+  if (!fimResult.valid) {
+    console.warn('[FIM Warning] File integrity check flagged files:', fimResult.modifiedFiles);
+  } else {
+    console.log('[FIM] File integrity check passed successfully.');
+  }
+
   const app = express();
   const PORT = 3000;
 
@@ -13,9 +21,15 @@ async function startServer() {
   app.use(corsMiddleware);
   app.use(express.json({ limit: '100kb' }));
   app.use(enforceContentType);
+  app.use(csrfProtection);
 
   // Rate limiters for sensitive endpoints
-  const apiRateLimiter = rateLimiter({ windowMs: 60000, max: 120 });
+  const authRateLimiter = rateLimiter({ windowMs: 60000, max: 20 });
+  const apiRateLimiter = rateLimiter({ windowMs: 60000, max: 150 });
+  const webhookRateLimiter = rateLimiter({ windowMs: 60000, max: 200 });
+
+  app.use('/api/auth/login', authRateLimiter);
+  app.use('/api/webhooks', webhookRateLimiter);
   app.use('/api', apiRateLimiter);
 
   // Mount API Router

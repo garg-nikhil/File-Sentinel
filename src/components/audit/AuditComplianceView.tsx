@@ -38,7 +38,7 @@ export const AuditComplianceView: React.FC<{ recentScanId?: string | null }> = (
   // Run form controls
   const [auditDate, setAuditDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
   const [agencyName, setAgencyName] = useState<string>('');
-  const [targetDir, setTargetDir] = useState<string>('');
+  const [scanRoots, setScanRoots] = useState<string[]>(['']);
 
   // Filters & Tabs
   const [activeTab, setActiveTab] = useState<'checklist' | 'categories' | 'gaps' | 'entities' | 'history'>('checklist');
@@ -118,7 +118,7 @@ export const AuditComplianceView: React.FC<{ recentScanId?: string | null }> = (
   };
 
   const handleRunAuditScan = async () => {
-    if (!targetDir.trim() && !recentScanId) {
+    if (scanRoots.filter(r => r.trim()).length === 0 && !recentScanId) {
       alert('Please enter a target directory path or run a file scan first.');
       return;
     }
@@ -126,7 +126,7 @@ export const AuditComplianceView: React.FC<{ recentScanId?: string | null }> = (
     setAuditErrorForScan(null);
     try {
       const newSession = await api.runAuditScan({
-        target_dir: targetDir.trim() || undefined,
+        scan_roots: scanRoots.filter(r => r.trim()),
         scan_id: recentScanId || undefined,
         audit_date: auditDate || new Date().toISOString().split('T')[0],
         agency_name: agencyName.trim() || 'Telecalling & Collection Agency',
@@ -231,6 +231,15 @@ export const AuditComplianceView: React.FC<{ recentScanId?: string | null }> = (
             >
               <FileCode className="w-3.5 h-3.5 text-cyan-500" /> Export JSON
             </a>
+            <a
+              href={`/api/reports/verify/${activeSession.audit_id}`}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3 py-1.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 text-xs font-bold rounded-lg transition-colors flex items-center gap-1.5 border border-indigo-500/30"
+              title="Verify cryptographic SHA-256 integrity signature"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" /> Verify Cryptographic Hash
+            </a>
           </div>
         )}
       </div>
@@ -285,21 +294,44 @@ export const AuditComplianceView: React.FC<{ recentScanId?: string | null }> = (
             />
           </div>
 
-          <div>
-            <label className="block font-semibold text-slate-600 dark:text-slate-400 mb-1">Scan Target Directory</label>
-            <input
-              type="text"
-              value={targetDir}
-              onChange={e => setTargetDir(e.target.value)}
-              placeholder="e.g. /path/to/evidence/folder"
-              className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono"
-            />
+          <div className="col-span-1 md:col-span-2">
+            <div className="flex justify-between items-center mb-1">
+              <label className="block font-semibold text-slate-600 dark:text-slate-400">Scan Targets (Multi-Root)</label>
+              <button 
+                onClick={() => setScanRoots([...scanRoots, ''])}
+                className="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 flex items-center gap-1 font-semibold"
+              >
+                + Add Folder
+              </button>
+            </div>
+            <div className="space-y-2">
+              {scanRoots.map((root, i) => (
+                <div key={i} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={root}
+                    onChange={e => {
+                      const newRoots = [...scanRoots];
+                      newRoots[i] = e.target.value;
+                      setScanRoots(newRoots);
+                    }}
+                    placeholder="e.g. /path/to/evidence/folder"
+                    className="flex-1 p-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100 font-mono text-sm"
+                  />
+                  {scanRoots.length > 1 && (
+                    <button onClick={() => setScanRoots(scanRoots.filter((_, idx) => idx !== i))} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg">
+                      ✕
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="flex items-end">
             <button
               onClick={handleRunAuditScan}
-              disabled={scanning || (!targetDir.trim() && !recentScanId)}
+              disabled={scanning || (scanRoots.filter(r => r.trim()).length === 0 && !recentScanId)}
               className="w-full py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-lg transition-colors shadow flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {scanning ? (

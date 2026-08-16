@@ -537,7 +537,7 @@ export class EvidenceValidator {
     if (titleCaseMatch) {
       const candidate = titleCaseMatch[1].trim();
       // Ignore common title phrases
-      if (!/(?:Debt Recovery|General Liability|Police Verification|Access Control|Code of|Fire Drill|Standard Operating|Operating Procedure|Banking Financial|Financial Education|Education Trust)/i.test(candidate)) {
+      if (!/(?:Debt Recovery|General Liability|Police Verification|Access Control|Code of|Fire Drill|Standard Operating|Operating Procedure|Banking Financial|Financial Education|Education Trust|Alternative Control|Recovery Agent)/i.test(candidate)) {
         return candidate;
       }
     }
@@ -545,7 +545,7 @@ export class EvidenceValidator {
     const allCapsMatch = text.match(/\b([A-Z]{2,15}\s+(?:[A-Z]\.?\s+)?[A-Z]{2,15})\b/);
     if (allCapsMatch) {
       const candidate = allCapsMatch[1].trim();
-      if (!/(?:BANKING FINANCIAL|EDUCATION TRUST|GENERAL LIABILITY|POLICE DEPARTMENT|ACCESS CONTROL|CODE OF|FIRE DRILL|STANDARD OPERATING)/i.test(candidate)) {
+      if (!/(?:BANKING FINANCIAL|EDUCATION TRUST|GENERAL LIABILITY|POLICE DEPARTMENT|ACCESS CONTROL|CODE OF|FIRE DRILL|STANDARD OPERATING|ALTERNATIVE CONTROL|GPO NAME|USB BLOCK)/i.test(candidate)) {
         return candidate;
       }
     }

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   LayoutDashboard,
   FolderSearch,
@@ -10,19 +10,29 @@ import {
   Settings,
   Shield,
   Radio,
-  FileCheck
+  FileCheck,
+  KeyRound,
+  Cloud,
+  Fingerprint,
+  ShieldCheck
 } from 'lucide-react';
+import { api } from '../services/api';
+import { LicenseInfo } from '../types';
 
 export type NavTab =
   | 'dashboard'
+  | 'cloud_dashboard'
   | 'audit'
+  | 'verify_report'
   | 'scan'
   | 'files'
   | 'findings'
   | 'quarantine'
   | 'rules'
   | 'history'
-  | 'settings';
+  | 'license'
+  | 'settings'
+  | 'admin_console';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -31,15 +41,25 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isScanning }) => {
+  const [license, setLicense] = useState<LicenseInfo | null>(null);
+
+  useEffect(() => {
+    api.getLicense().then(setLicense).catch(() => {});
+  }, [activeTab]);
+
   const menuItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
-    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'dashboard', label: 'Local DLP Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'cloud_dashboard', label: 'Vendor Cloud Dashboard', icon: <Cloud className="w-4 h-4 text-emerald-400" /> },
     { id: 'audit', label: 'Audit Compliance', icon: <FileCheck className="w-4 h-4" /> },
+    { id: 'verify_report', label: 'Report Verification', icon: <Fingerprint className="w-4 h-4 text-indigo-400" /> },
     { id: 'scan', label: 'Scanner', icon: <FolderSearch className="w-4 h-4" /> },
     { id: 'files', label: 'Scanned Files', icon: <FileText className="w-4 h-4" /> },
     { id: 'findings', label: 'Findings Log', icon: <AlertTriangle className="w-4 h-4" /> },
     { id: 'quarantine', label: 'Quarantine Vault', icon: <ShieldAlert className="w-4 h-4" /> },
     { id: 'rules', label: 'Rule Engine', icon: <SlidersHorizontal className="w-4 h-4" /> },
     { id: 'history', label: 'Scan History', icon: <History className="w-4 h-4" /> },
+    { id: 'license', label: 'License & Plan', icon: <KeyRound className="w-4 h-4" /> },
+    { id: 'admin_console', label: 'Admin Console', icon: <ShieldCheck className="w-4 h-4 text-rose-400" /> },
     { id: 'settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> }
   ];
 
@@ -54,7 +74,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isSca
             <h1 className="text-base font-bold text-slate-100 tracking-tight flex items-center gap-2">
               FileSentinel
               <span className="text-[10px] font-mono font-normal uppercase bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                MVP
+                PRO
               </span>
             </h1>
             <p className="text-xs text-slate-400 font-sans">Local DLP & Compliance</p>
@@ -83,6 +103,19 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isSca
                     Scanning
                   </span>
                 )}
+                {item.id === 'license' && license && (
+                  <span className={`ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                    license.ui_state === 'ACTIVE'
+                      ? 'bg-emerald-500/20 text-emerald-300'
+                      : license.ui_state === 'TRIAL'
+                      ? 'bg-blue-500/20 text-blue-300'
+                      : license.ui_state === 'OFFLINE_GRACE'
+                      ? 'bg-amber-500/20 text-amber-300 animate-pulse'
+                      : 'bg-rose-500/20 text-rose-300'
+                  }`}>
+                    {license.ui_state}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -95,6 +128,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isSca
           <span className="text-emerald-400 font-mono font-medium flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             ACTIVE
+          </span>
+        </div>
+        <div className="flex items-center justify-between text-slate-400">
+          <span>License Plan:</span>
+          <span className="text-slate-300 font-mono font-semibold">
+            {license?.plan_name || 'Enterprise'}
           </span>
         </div>
         <div className="flex items-center justify-between text-slate-400">

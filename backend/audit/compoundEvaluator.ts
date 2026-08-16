@@ -1,3 +1,4 @@
+import { EvidenceAggregator } from './evidenceAggregator.js';
 import {
   AuditParameter,
   AuditParameterResult,
@@ -11,7 +12,7 @@ import {
 import { EvidenceValidator } from './evidenceValidator.js';
 import { DateEvaluator } from './dateEvaluator.js';
 import { assertEvidenceDomainMatchesControl } from './evidenceDomain.js';
-import { calculateEvidencePriority } from './evidenceMatcher.js';
+import { calculateEvidencePriority, enrichEvidenceItemWithMetricsAndRole } from './evidenceMatcher.js';
 
 export class CompoundEvaluator {
   /**
@@ -76,6 +77,7 @@ export class CompoundEvaluator {
     // If no specific sub-evidence was linked but evidence exists, keep parameter level evidence
     const allEvidence = usedEvidenceMap.size > 0 ? Array.from(usedEvidenceMap.values()) : evidenceItems;
 
+    const { evidenceSet } = EvidenceAggregator.aggregate(parameter, allEvidence);
     return {
       parameter_id: parameter.id,
       parameter,
@@ -88,6 +90,7 @@ export class CompoundEvaluator {
       sub_control_results: subResults,
       children: subResults,
       evidence: allEvidence,
+      evidence_set: evidenceSet,
       reason,
       missing_requirements: missingRequirements,
       warnings
@@ -267,6 +270,28 @@ export class CompoundEvaluator {
       return b.validation.confidence - a.validation.confidence;
     });
 
+    // Contradiction detection across validated items for this requirement
+    const { evidenceSet, hasContradiction } = EvidenceAggregator.aggregate(
+      { ...parentParameter, id: req.id },
+      validatedItems.map(i => i.evidence)
+    );
+
+    if (hasContradiction) {
+      return {
+        id: req.id,
+        name: req.name,
+        description: req.description,
+        status: 'REVIEW',
+        score_earned: 0,
+        max_score: maxScore,
+        confidence: 0.80,
+        evidence: validatedItems.map(i => i.evidence),
+        reason: `Conflicting operational evidence detected for '${req.name}'. Auditor review required.`,
+        missing_requirements: [],
+        warnings: ['Contradictory evidence detected within sub-control']
+      };
+    }
+
     // Sub-control PASS
     const bestItem = validatedItems[0];
     return {
@@ -277,7 +302,7 @@ export class CompoundEvaluator {
       score_earned: maxScore,
       max_score: maxScore,
       confidence: bestItem.validation.confidence,
-      evidence: [bestItem.evidence],
+      evidence: validatedItems.map(i => i.evidence),
       reason: bestItem.validation.validationReason || `Valid evidence verified for '${req.name}'.`,
       missing_requirements: []
     };
@@ -379,9 +404,15 @@ export class CompoundEvaluator {
     const totalCount = subResults.length;
     const passedCount = passedResults.length;
 
-    const missingRequirements = subResults
+    let missingRequirements = subResults
       .filter(r => r.status !== 'PASS')
       .flatMap(r => (r.missing_requirements && r.missing_requirements.length > 0) ? r.missing_requirements : [(r.name || r.title || r.id)]);
+
+    if (missingRequirements.length === 0) {
+      missingRequirements = subResults
+        .filter(r => r.status !== 'PASS')
+        .map(r => `${r.name || r.title || r.id} compliance implementation evidence`);
+    }
 
     const warnings = Array.from(new Set(subResults.flatMap(r => r.warnings || [])));
 

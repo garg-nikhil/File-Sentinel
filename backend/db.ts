@@ -1,15 +1,18 @@
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import fs from 'node:fs';
+import crypto from 'node:crypto';
 import { BUILTIN_RULES } from '../src/rules/builtinRules.js';
 
-let dbInstance: DatabaseSync | null = null;
+let defaultDbInstance: DatabaseSync | null = null;
 
 export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync {
-  if (dbInstance) return dbInstance;
+  if (dbPath === './filesentinel.db' && defaultDbInstance) {
+    return defaultDbInstance;
+  }
 
   const dbDir = path.dirname(dbPath);
-  if (!fs.existsSync(dbDir)) {
+  if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
@@ -212,6 +215,257 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         conflicting_attributes_json TEXT,
         created_at TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS organizations (
+        org_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        suspended INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT NOT NULL,
+        disabled INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS devices (
+        device_id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        device_name TEXT NOT NULL,
+        revoked INTEGER DEFAULT 0,
+        registered_at TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        device_id TEXT,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS security_audit_events (
+        id TEXT PRIMARY KEY,
+        timestamp TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        org_id TEXT,
+        user_id TEXT,
+        device_id TEXT,
+        details TEXT,
+        status TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS plans (
+        plan_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        max_users INTEGER NOT NULL,
+        max_devices INTEGER NOT NULL,
+        scan_limit INTEGER NOT NULL,
+        feature_flags TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS licenses (
+        license_id TEXT PRIMARY KEY,
+        organization_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        issued_at TEXT NOT NULL,
+        starts_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        grace_until TEXT,
+        max_users INTEGER NOT NULL,
+        max_devices INTEGER NOT NULL,
+        scan_limit INTEGER NOT NULL,
+        scans_used INTEGER DEFAULT 0,
+        feature_flags TEXT NOT NULL,
+        trial_start TEXT,
+        trial_end TEXT,
+        trial_status TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_validated_at TEXT,
+        FOREIGN KEY (organization_id) REFERENCES organizations(org_id),
+        FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS license_devices (
+        id TEXT PRIMARY KEY,
+        license_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        activated_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        last_seen_at TEXT NOT NULL,
+        FOREIGN KEY (license_id) REFERENCES licenses(license_id),
+        FOREIGN KEY (device_id) REFERENCES devices(device_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS license_events (
+        id TEXT PRIMARY KEY,
+        license_id TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        details TEXT,
+        actor_id TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS scan_telemetry (
+        scan_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        application_version TEXT NOT NULL,
+        engine_version TEXT NOT NULL,
+        checklist_version TEXT NOT NULL,
+        files_discovered INTEGER NOT NULL,
+        files_processed INTEGER NOT NULL,
+        files_succeeded INTEGER NOT NULL,
+        files_failed INTEGER NOT NULL,
+        files_rejected_by_resource_limits INTEGER NOT NULL,
+        pass_count INTEGER NOT NULL,
+        review_count INTEGER NOT NULL,
+        fail_count INTEGER NOT NULL,
+        evidence_not_found_count INTEGER NOT NULL,
+        critical_count INTEGER NOT NULL,
+        high_count INTEGER NOT NULL,
+        medium_count INTEGER NOT NULL,
+        low_count INTEGER NOT NULL,
+        overall_score REAL NOT NULL,
+        parameters_evaluated INTEGER NOT NULL,
+        scan_status TEXT NOT NULL,
+        device_telemetry_json TEXT,
+        debug_filenames_opt_in INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        ip_address TEXT,
+        PRIMARY KEY (organization_id, scan_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS telemetry_queue (
+        queue_id TEXT PRIMARY KEY,
+        scan_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'PENDING',
+        attempts INTEGER DEFAULT 0,
+        last_attempt_at TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        synced_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS billing_customers (
+        customer_id TEXT PRIMARY KEY,
+        org_id TEXT UNIQUE NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'RAZORPAY',
+        provider_customer_id TEXT NOT NULL,
+        email TEXT NOT NULL,
+        name TEXT,
+        billing_currency TEXT DEFAULT 'INR',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        subscription_id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        customer_id TEXT NOT NULL,
+        provider_subscription_id TEXT UNIQUE NOT NULL,
+        plan_id TEXT NOT NULL,
+        billing_interval TEXT NOT NULL, -- 'MONTHLY' | 'ANNUAL'
+        status TEXT NOT NULL, -- 'TRIAL' | 'ACTIVE' | 'PAST_DUE' | 'GRACE_PERIOD' | 'EXPIRED' | 'CANCELLED'
+        current_period_start TEXT NOT NULL,
+        current_period_end TEXT NOT NULL,
+        grace_until TEXT,
+        trial_ends_at TEXT,
+        cancel_at_period_end INTEGER DEFAULT 0,
+        cancelled_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id),
+        FOREIGN KEY (customer_id) REFERENCES billing_customers(customer_id),
+        FOREIGN KEY (plan_id) REFERENCES plans(plan_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS subscription_events (
+        event_id TEXT PRIMARY KEY,
+        subscription_id TEXT,
+        org_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        previous_status TEXT,
+        new_status TEXT,
+        details_json TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS payment_events (
+        payment_id TEXT PRIMARY KEY,
+        subscription_id TEXT,
+        org_id TEXT NOT NULL,
+        provider_payment_id TEXT UNIQUE NOT NULL,
+        amount_cents INTEGER NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'INR',
+        status TEXT NOT NULL, -- 'SUCCESS' | 'FAILURE' | 'PENDING'
+        error_code TEXT,
+        error_description TEXT,
+        raw_payload_json TEXT,
+        processed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS processed_webhooks (
+        event_id TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        processed_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS privacy_retention_policies (
+        org_id TEXT PRIMARY KEY,
+        cloud_metadata_retention_days INTEGER DEFAULT 90,
+        auto_purge_enabled INTEGER DEFAULT 1,
+        last_purged_at TEXT,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_reports (
+        report_id TEXT PRIMARY KEY,
+        scan_id TEXT NOT NULL,
+        organization_id TEXT NOT NULL,
+        engine_version TEXT NOT NULL,
+        checklist_version TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        report_hash TEXT NOT NULL,
+        signature TEXT,
+        public_key TEXT,
+        status TEXT NOT NULL DEFAULT 'VALID', -- 'VALID' | 'REVOKED' | 'INVALID'
+        canonical_payload_json TEXT NOT NULL,
+        revoked_at TEXT,
+        revocation_reason TEXT,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS pilot_telemetry_events (
+        event_id TEXT PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        org_id TEXT NOT NULL,
+        user_id TEXT,
+        device_id TEXT,
+        details_json TEXT,
+        timestamp TEXT NOT NULL
+      );
     `);
 
     // Database schema migrations for existing databases
@@ -220,8 +474,159 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       if (!sessionCols.some(c => c.name === 'scan_id')) {
         db.exec("ALTER TABLE audit_sessions ADD COLUMN scan_id TEXT;");
       }
+      if (!sessionCols.some(c => c.name === 'org_id')) {
+        db.exec("ALTER TABLE audit_sessions ADD COLUMN org_id TEXT;");
+      }
+      if (!sessionCols.some(c => c.name === 'user_id')) {
+        db.exec("ALTER TABLE audit_sessions ADD COLUMN user_id TEXT;");
+      }
+      if (!sessionCols.some(c => c.name === 'device_id')) {
+        db.exec("ALTER TABLE audit_sessions ADD COLUMN device_id TEXT;");
+      }
+
+      const scanCols = db.prepare("PRAGMA table_info(scans)").all() as { name: string }[];
+      if (!scanCols.some(c => c.name === 'org_id')) {
+        db.exec("ALTER TABLE scans ADD COLUMN org_id TEXT;");
+      }
+      if (!scanCols.some(c => c.name === 'user_id')) {
+        db.exec("ALTER TABLE scans ADD COLUMN user_id TEXT;");
+      }
+      if (!scanCols.some(c => c.name === 'device_id')) {
+        db.exec("ALTER TABLE scans ADD COLUMN device_id TEXT;");
+      }
+
+      const orgCols = db.prepare("PRAGMA table_info(organizations)").all() as { name: string }[];
+      if (!orgCols.some(c => c.name === 'suspended')) {
+        db.exec("ALTER TABLE organizations ADD COLUMN suspended INTEGER DEFAULT 0;");
+      }
+
+      const licCols = db.prepare("PRAGMA table_info(licenses)").all() as { name: string }[];
+      if (!licCols.some(c => c.name === 'trial_start')) {
+        db.exec("ALTER TABLE licenses ADD COLUMN trial_start TEXT;");
+      }
+      if (!licCols.some(c => c.name === 'trial_end')) {
+        db.exec("ALTER TABLE licenses ADD COLUMN trial_end TEXT;");
+      }
+      if (!licCols.some(c => c.name === 'trial_status')) {
+        db.exec("ALTER TABLE licenses ADD COLUMN trial_status TEXT;");
+      }
+
+      const reportCols = db.prepare("PRAGMA table_info(audit_reports)").all() as { name: string }[];
+      if (reportCols.length > 0) {
+        if (!reportCols.some(c => c.name === 'signature')) {
+          db.exec("ALTER TABLE audit_reports ADD COLUMN signature TEXT;");
+        }
+        if (!reportCols.some(c => c.name === 'public_key')) {
+          db.exec("ALTER TABLE audit_reports ADD COLUMN public_key TEXT;");
+        }
+      }
     } catch (migErr) {
-      console.warn('[DB Migration] audit_sessions migration check:', migErr);
+      console.warn('[DB Migration] migration check:', migErr);
+    }
+
+    // Seed default system administrator if none exists
+    const sysAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE role = 'SYS_ADMIN'").get() as { count: number };
+    if (sysAdminCheck.count === 0) {
+      const sysOrgId = 'org-sysadmin-internal';
+      const now = new Date().toISOString();
+      db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, suspended, created_at) VALUES (?, ?, 0, ?)').run(sysOrgId, 'FileSentinel Internal Administration', now);
+
+      const sysUserId = 'user-sysadmin-01';
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.scryptSync('SysAdmin123!', salt, 64).toString('hex');
+      const sysHash = `${salt}:${hash}`;
+      db.prepare('INSERT OR IGNORE INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(sysUserId, sysOrgId, 'sysadmin', sysHash, 'SYS_ADMIN', now);
+    }
+
+    // Seed default plans
+    const planCheck = db.prepare('SELECT COUNT(*) as count FROM plans').get() as { count: number };
+    if (planCheck.count === 0) {
+      const now = new Date().toISOString();
+      const insertPlan = db.prepare(`
+        INSERT INTO plans (plan_id, name, max_users, max_devices, scan_limit, feature_flags, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      insertPlan.run(
+        'plan-starter-trial',
+        'Starter Trial',
+        2,
+        2,
+        25,
+        JSON.stringify(['LOCAL_SCANNING', 'AUDIT_ENGINE']),
+        now
+      );
+      insertPlan.run(
+        'plan-professional',
+        'Professional',
+        10,
+        10,
+        500,
+        JSON.stringify(['LOCAL_SCANNING', 'AUDIT_ENGINE', 'MULTI_FOLDER_SCAN', 'CENTRAL_HISTORY', 'ADVANCED_REPORTING']),
+        now
+      );
+      insertPlan.run(
+        'plan-enterprise',
+        'Enterprise Suite',
+        100,
+        50,
+        -1,
+        JSON.stringify(['LOCAL_SCANNING', 'AUDIT_ENGINE', 'MULTI_FOLDER_SCAN', 'CLOUD_EVIDENCE_UPLOAD', 'CENTRAL_HISTORY', 'ADVANCED_REPORTING', 'API_ACCESS']),
+        now
+      );
+    }
+
+    // Seed default organization, user, device, and license if none exist
+    const orgCheck = db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number };
+    if (orgCheck.count === 0) {
+      const defaultOrgId = 'org-default-dev';
+      const now = new Date().toISOString();
+      db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(defaultOrgId, 'Default Dev Organization', now);
+
+      const defaultUserId = 'user-default-dev';
+      const salt = crypto.randomBytes(16).toString('hex');
+      const hash = crypto.scryptSync('devpassword', salt, 64).toString('hex');
+      const defaultHash = `${salt}:${hash}`;
+      db.prepare('INSERT INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(defaultUserId, defaultOrgId, 'devadmin', defaultHash, 'ORG_ADMIN', now);
+
+      const defaultDeviceId = 'dev-device-default';
+      db.prepare('INSERT INTO devices (device_id, org_id, device_name, revoked, registered_at) VALUES (?, ?, ?, 0, ?)').run(defaultDeviceId, defaultOrgId, 'Default Development Device', now);
+
+      // Seed default active enterprise license for dev organization
+      const defaultLicenseId = 'lic-default-dev';
+      const startsAt = new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
+      const graceUntil = new Date(Date.now() + (365 + 7) * 24 * 3600 * 1000).toISOString();
+      const enterpriseFeatures = JSON.stringify(['LOCAL_SCANNING', 'AUDIT_ENGINE', 'MULTI_FOLDER_SCAN', 'CLOUD_EVIDENCE_UPLOAD', 'CENTRAL_HISTORY', 'ADVANCED_REPORTING', 'API_ACCESS']);
+
+      db.prepare(`
+        INSERT INTO licenses (
+          license_id, organization_id, plan_id, status, issued_at, starts_at, expires_at,
+          grace_until, max_users, max_devices, scan_limit, scans_used, feature_flags,
+          created_at, updated_at, last_validated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+      `).run(
+        defaultLicenseId,
+        defaultOrgId,
+        'plan-enterprise',
+        'ACTIVE',
+        now,
+        startsAt,
+        expiresAt,
+        graceUntil,
+        100,
+        50,
+        -1,
+        enterpriseFeatures,
+        now,
+        now,
+        now
+      );
+
+      // Activate default device on the license
+      db.prepare(`
+        INSERT INTO license_devices (id, license_id, device_id, activated_at, status, last_seen_at)
+        VALUES (?, ?, ?, ?, 'ACTIVE', ?)
+      `).run('ldev-default-dev', defaultLicenseId, defaultDeviceId, now, now);
     }
 
     // Seed default built-in rules if table is empty
@@ -248,8 +653,9 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
     return db;
   };
 
+  let instance: DatabaseSync;
   try {
-    dbInstance = initDb(dbPath);
+    instance = initDb(dbPath);
   } catch (err: any) {
     if (err?.code === 'ERR_SQLITE_ERROR' || err?.message?.includes('malformed')) {
       console.warn(`[SQLite] Database corrupt (${err.message}). Removing and recreating fresh database.`);
@@ -260,11 +666,15 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       } catch (unlinkErr) {
         console.error('[SQLite] Unlink error:', unlinkErr);
       }
-      dbInstance = initDb(dbPath);
+      instance = initDb(dbPath);
     } else {
       throw err;
     }
   }
 
-  return dbInstance;
+  if (dbPath === './filesentinel.db') {
+    defaultDbInstance = instance;
+  }
+
+  return instance;
 }
