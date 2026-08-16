@@ -1021,37 +1021,49 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.get('/scans/:id/progress', (req: Request, res: Response) => {
+  router.get('/scans/:id/progress', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const { id } = req.params;
+    const orgId = req.user!.orgId;
     const active = scannerEngine.getScanProgress(id);
-    if (active) return res.json(active);
+    if (active) {
+      const rowDb = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(id) as any;
+      if (rowDb && rowDb.org_id && rowDb.org_id !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant scan progress forbidden' });
+      }
+      return res.json(active);
+    }
 
-    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ?').get(id);
-    if (!row) return res.status(404).json({ error: 'Scan session not found' });
+    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND (org_id = ? OR org_id IS NULL)').get(id, orgId) as any;
+    if (!row) return res.status(404).json({ error: 'Scan session not found or unauthorized' });
     res.json(row);
   });
 
   // --- FILES ---
-  router.get('/files', (req: Request, res: Response) => {
+  router.get('/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    const orgId = req.user!.orgId;
     const { scan_id, classification, severity } = req.query;
-    let query = 'SELECT * FROM files';
-    const params: any[] = [];
+    let query = 'SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL)';
+    const params: any[] = [orgId];
     const conditions: string[] = [];
 
     if (scan_id) {
-      conditions.push('scan_id = ?');
+      const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scan_id) as any;
+      if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant file access forbidden' });
+      }
+      conditions.push('f.scan_id = ?');
       params.push(scan_id);
     }
     if (classification) {
-      conditions.push('classification = ?');
+      conditions.push('f.classification = ?');
       params.push(classification);
     }
 
     if (conditions.length > 0) {
-      query += ' WHERE ' + conditions.join(' AND ');
+      query += ' AND ' + conditions.join(' AND ');
     }
 
-    query += ' ORDER BY risk_score DESC, file_id DESC LIMIT 200';
+    query += ' ORDER BY f.risk_score DESC, f.file_id DESC LIMIT 200';
 
     const rows = db.prepare(query).all(...params) as any[];
     const parsedFiles = rows.map(f => {
@@ -1082,10 +1094,15 @@ export function createApiRouter(customDb?: any) {
     res.json(parsedFiles);
   });
 
-  router.get('/files/:id', (req: Request, res: Response) => {
+  router.get('/files/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const { id } = req.params;
-    const row = db.prepare('SELECT * FROM files WHERE file_id = ?').get(id) as any;
-    if (!row) return res.status(404).json({ error: 'File not found' });
+    const orgId = req.user!.orgId;
+    const row = db.prepare(`
+      SELECT f.* FROM files f
+      JOIN scans s ON f.scan_id = s.scan_id
+      WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+    `).get(id, orgId) as any;
+    if (!row) return res.status(404).json({ error: 'File not found or unauthorized' });
 
     const findingsRows = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(id) as any[];
     const findings = findingsRows.map(fRow => ({
@@ -1103,10 +1120,15 @@ export function createApiRouter(customDb?: any) {
   });
 
   // AI Gemini trigger route for deep file evaluation
-  router.post('/files/:id/analyze-ai', async (req: Request, res: Response) => {
+  router.post('/files/:id/analyze-ai', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
     const { id } = req.params;
-    const fileRow = db.prepare('SELECT * FROM files WHERE file_id = ?').get(id) as any;
-    if (!fileRow) return res.status(404).json({ error: 'File not found' });
+    const orgId = req.user!.orgId;
+    const fileRow = db.prepare(`
+      SELECT f.* FROM files f
+      JOIN scans s ON f.scan_id = s.scan_id
+      WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+    `).get(id, orgId) as any;
+    if (!fileRow) return res.status(404).json({ error: 'File not found or unauthorized' });
 
     const findingsCount = db.prepare('SELECT COUNT(*) as count FROM findings WHERE file_id = ?').get(id) as { count: number };
 
@@ -1129,11 +1151,14 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- FINDINGS ---
-  router.get('/findings', (req: Request, res: Response) => {
+  router.get('/findings', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    const orgId = req.user!.orgId;
     const rows = db.prepare(`
       SELECT f.*, fi.filename, fi.path as file_path
       FROM findings f
       JOIN files fi ON f.file_id = fi.file_id
+      JOIN scans s ON fi.scan_id = s.scan_id
+      WHERE s.org_id = ? OR s.org_id IS NULL
       ORDER BY 
         CASE f.severity
           WHEN 'CRITICAL' THEN 1
@@ -1143,7 +1168,7 @@ export function createApiRouter(customDb?: any) {
           ELSE 5
         END, f.created_at DESC
       LIMIT 300
-    `).all() as any[];
+    `).all(orgId) as any[];
 
     const findings = rows.map(r => ({
       ...r,
@@ -1170,7 +1195,7 @@ export function createApiRouter(customDb?: any) {
     res.json(rules);
   });
 
-  router.post('/rules', (req: Request, res: Response) => {
+  router.post('/rules', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
     const { id, name, category, severity, enabled, pattern, description, recommendation } = req.body;
     const newId = id || `RULE-${crypto.randomUUID().substring(0, 8)}`;
 
@@ -1184,7 +1209,7 @@ export function createApiRouter(customDb?: any) {
     res.json({ success: true, id: newId });
   });
 
-  router.put('/rules/:id/toggle', (req: Request, res: Response) => {
+  router.put('/rules/:id/toggle', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
     const { id } = req.params;
     const { enabled } = req.body;
 
@@ -1193,8 +1218,15 @@ export function createApiRouter(customDb?: any) {
   });
 
   // --- QUARANTINE & VERIFIED CLOUD REMOVAL ---
-  router.get('/quarantine', (req: Request, res: Response) => {
-    const rows = db.prepare('SELECT * FROM quarantine_items ORDER BY quarantined_at DESC').all() as any[];
+  router.get('/quarantine', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    const orgId = req.user!.orgId;
+    const rows = db.prepare(`
+      SELECT q.* FROM quarantine_items q
+      JOIN files f ON q.file_id = f.file_id
+      JOIN scans s ON f.scan_id = s.scan_id
+      WHERE s.org_id = ? OR s.org_id IS NULL
+      ORDER BY q.quarantined_at DESC
+    `).all(orgId) as any[];
     const items = rows.map(r => ({
       ...r,
       logs: r.logs_json ? JSON.parse(r.logs_json) : []
@@ -1202,10 +1234,15 @@ export function createApiRouter(customDb?: any) {
     res.json(items);
   });
 
-  router.post('/quarantine/:file_id', (req: Request, res: Response) => {
+  router.post('/quarantine/:file_id', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
     const { file_id } = req.params;
-    const fileRow = db.prepare('SELECT * FROM files WHERE file_id = ?').get(file_id) as any;
-    if (!fileRow) return res.status(404).json({ error: 'File not found' });
+    const orgId = req.user!.orgId;
+    const fileRow = db.prepare(`
+      SELECT f.* FROM files f
+      JOIN scans s ON f.scan_id = s.scan_id
+      WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+    `).get(file_id, orgId) as any;
+    if (!fileRow) return res.status(404).json({ error: 'File not found or unauthorized' });
 
     const qId = `Q-${crypto.randomUUID().substring(0, 8)}`;
     const logs = [`[${new Date().toISOString()}] File staged in quarantine registry`];
@@ -1235,30 +1272,57 @@ export function createApiRouter(customDb?: any) {
   });
 
   // CRITICAL CORRECTION: Local file deletion route disabled and removed completely (Phase 6A: local files must never be deleted).
-  router.post('/quarantine/:file_id/upload-and-remove', (req: Request, res: Response) => {
+  router.post('/quarantine/:file_id/upload-and-remove', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Endpoint disabled or not supported. Local files are never deleted.' });
   });
 
   // --- DASHBOARD STATS ---
-  router.get('/dashboard/stats', (req: Request, res: Response) => {
-    const totalScans = (db.prepare('SELECT COUNT(*) as c FROM scans').get() as any).c;
-    const totalFilesScanned = (db.prepare('SELECT COUNT(*) as c FROM files').get() as any).c;
+  router.get('/dashboard/stats', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    const orgId = req.user!.orgId;
+    const totalScans = (db.prepare('SELECT COUNT(*) as c FROM scans WHERE org_id = ? OR org_id IS NULL').get(orgId) as any).c;
+    const totalFilesScanned = (db.prepare(`
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? OR s.org_id IS NULL
+    `).get(orgId) as any).c;
 
-    const critical = (db.prepare("SELECT COUNT(*) as c FROM files WHERE risk_score >= 80").get() as any).c;
-    const high = (db.prepare("SELECT COUNT(*) as c FROM files WHERE risk_score >= 50 AND risk_score < 80").get() as any).c;
-    const medium = (db.prepare("SELECT COUNT(*) as c FROM files WHERE risk_score >= 20 AND risk_score < 50").get() as any).c;
-    const low = (db.prepare("SELECT COUNT(*) as c FROM files WHERE risk_score > 0 AND risk_score < 20").get() as any).c;
-    const safe = (db.prepare("SELECT COUNT(*) as c FROM files WHERE risk_score = 0").get() as any).c;
+    const critical = (db.prepare(`
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score >= 80
+    `).get(orgId) as any).c;
+    const high = (db.prepare(`
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score >= 50 AND f.risk_score < 80
+    `).get(orgId) as any).c;
+    const medium = (db.prepare(`
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score >= 20 AND f.risk_score < 50
+    `).get(orgId) as any).c;
+    const low = (db.prepare(`
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score > 0 AND f.risk_score < 20
+    `).get(orgId) as any).c;
+    const safe = (db.prepare(`
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score = 0
+    `).get(orgId) as any).c;
 
-    const recentScans = db.prepare('SELECT * FROM scans ORDER BY start_time DESC LIMIT 5').all();
-    const highestRiskFiles = db.prepare('SELECT * FROM files ORDER BY risk_score DESC LIMIT 5').all();
-    const recentFindings = db.prepare('SELECT f.*, fi.filename FROM findings f JOIN files fi ON f.file_id = fi.file_id ORDER BY created_at DESC LIMIT 6').all();
+    const recentScans = db.prepare('SELECT * FROM scans WHERE org_id = ? OR org_id IS NULL ORDER BY start_time DESC LIMIT 5').all(orgId);
+    const highestRiskFiles = db.prepare(`
+      SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? OR s.org_id IS NULL ORDER BY f.risk_score DESC LIMIT 5
+    `).all(orgId);
+    const recentFindings = db.prepare(`
+      SELECT f.*, fi.filename FROM findings f
+      JOIN files fi ON f.file_id = fi.file_id
+      JOIN scans s ON fi.scan_id = s.scan_id
+      WHERE s.org_id = ? OR s.org_id IS NULL
+      ORDER BY f.created_at DESC LIMIT 6
+    `).all(orgId);
+    const quarantinedCount = (db.prepare(`
+      SELECT COUNT(*) as c FROM quarantine_items q
+      JOIN files fi ON q.file_id = fi.file_id
+      JOIN scans s ON fi.scan_id = s.scan_id
+      WHERE s.org_id = ? OR s.org_id IS NULL
+    `).get(orgId) as any).c;
 
     res.json({
       totalScans,
       totalFilesScanned,
       riskBreakdown: { critical, high, medium, low, safe },
-      quarantinedCount: (db.prepare('SELECT COUNT(*) as c FROM quarantine_items').get() as any).c,
+      quarantinedCount,
       recentScans,
       highestRiskFiles,
       recentFindings
@@ -1266,8 +1330,9 @@ export function createApiRouter(customDb?: any) {
   });
 
   // AUDIT LOGS
-  router.get('/audit-logs', (req: Request, res: Response) => {
-    const rows = db.prepare('SELECT * FROM audit_events ORDER BY timestamp DESC LIMIT 100').all();
+  router.get('/audit-logs', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR']), (req: Request, res: Response) => {
+    const orgId = req.user!.orgId;
+    const rows = db.prepare('SELECT * FROM security_audit_events WHERE org_id = ? OR org_id IS NULL ORDER BY timestamp DESC LIMIT 100').all(orgId);
     res.json(rows);
   });
 
@@ -1348,9 +1413,15 @@ export function createApiRouter(customDb?: any) {
   });
 
   // List past audit sessions
-  router.get('/audit/sessions', (req: Request, res: Response) => {
+  router.get('/audit/sessions', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     try {
-      const rows = db.prepare('SELECT * FROM audit_sessions ORDER BY created_at DESC LIMIT 50').all() as any[];
+      const orgId = req.user!.orgId;
+      const rows = db.prepare(`
+        SELECT a.* FROM audit_sessions a
+        LEFT JOIN scans s ON a.scan_id = s.scan_id
+        WHERE s.org_id = ? OR s.org_id IS NULL OR a.scan_id IS NULL
+        ORDER BY a.created_at DESC LIMIT 50
+      `).all(orgId) as any[];
       const sessions = rows.map(r => ({
         ...r,
         category_scores: r.category_scores_json ? JSON.parse(r.category_scores_json) : {}
@@ -1362,11 +1433,18 @@ export function createApiRouter(customDb?: any) {
   });
 
   // Get specific audit session details with parameters and evidence
-  router.get('/audit/session/:id', (req: Request, res: Response) => {
+  router.get('/audit/session/:id', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     try {
+      const orgId = req.user!.orgId;
       const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(req.params.id) as any;
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
+      }
+      if (sessionRow.scan_id) {
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
+        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant audit session access forbidden' });
+        }
       }
 
       const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(req.params.id) as any[];
@@ -1448,12 +1526,24 @@ export function createApiRouter(customDb?: any) {
   });
 
   // Auditor Override Endpoint
-  router.post('/audit/override', (req: Request, res: Response) => {
+  router.post('/audit/override', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR']), (req: Request, res: Response) => {
     try {
+      const orgId = req.user!.orgId;
       const { audit_id, parameter_id, new_status, auditor_name, comment } = req.body;
 
       if (!audit_id || !parameter_id || !new_status || !auditor_name) {
         return res.status(400).json({ error: 'Missing required override fields' });
+      }
+
+      const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(audit_id) as any;
+      if (!sessionRow) {
+        return res.status(404).json({ error: 'Audit session not found' });
+      }
+      if (sessionRow.scan_id) {
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
+        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant audit override forbidden' });
+        }
       }
 
       // Fetch existing result
@@ -1478,7 +1568,7 @@ export function createApiRouter(customDb?: any) {
       `).run(JSON.stringify(override), audit_id, parameter_id);
 
       // Recalculate Audit Session Scores
-      const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(audit_id) as any;
+      const updatedSessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(audit_id) as any;
       const allParamRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(audit_id) as any[];
 
       const checklistMap = new Map(INITIAL_AUDIT_CHECKLIST.map(p => [p.id, p]));
@@ -1503,9 +1593,9 @@ export function createApiRouter(customDb?: any) {
 
       const updatedSession = AuditScoringEngine.calculateAuditSummary(
         audit_id,
-        sessionRow.agency_name,
-        sessionRow.auditor_name,
-        sessionRow.audit_date,
+        updatedSessionRow.agency_name,
+        updatedSessionRow.auditor_name,
+        updatedSessionRow.audit_date,
         fullResults as any
       );
 
@@ -1806,7 +1896,13 @@ export function createApiRouter(customDb?: any) {
   // --- PHASE 6A: CLOUD UPLOAD ONLY / NON-DESTRUCTIVE QUARANTINE ---
   router.get('/cloud-uploads', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     try {
-      const rows = db.prepare('SELECT * FROM file_cloud_uploads').all();
+      const orgId = req.user!.orgId;
+      const rows = db.prepare(`
+        SELECT u.* FROM file_cloud_uploads u
+        JOIN files f ON u.file_id = f.file_id
+        JOIN scans s ON f.scan_id = s.scan_id
+        WHERE s.org_id = ? OR s.org_id IS NULL
+      `).all(orgId);
       res.json(rows);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -1934,6 +2030,13 @@ export function createApiRouter(customDb?: any) {
         if (!isValidFileId(fileId)) {
           return res.status(400).json({ error: `Invalid file ID format or security violation: ${fileId}` });
         }
+        const fileRow = db.prepare(`
+          SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
+          WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+        `).get(fileId, orgId);
+        if (!fileRow) {
+          return res.status(403).json({ error: `Access denied: File not found or unauthorized: ${fileId}` });
+        }
       }
 
       const results: any[] = [];
@@ -1974,13 +2077,17 @@ export function createApiRouter(customDb?: any) {
       }
 
       const { scan_id } = req.body;
-      let query = 'SELECT file_id FROM files';
-      const params: any[] = [];
+      let query = 'SELECT f.file_id FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL)';
+      const params: any[] = [orgId];
       if (scan_id) {
         if (typeof scan_id !== 'string' || scan_id.length > 64) {
           return res.status(400).json({ error: 'Invalid scan_id parameter' });
         }
-        query += ' WHERE scan_id = ?';
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scan_id) as any;
+        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant scan upload forbidden' });
+        }
+        query += ' AND f.scan_id = ?';
         params.push(scan_id);
       }
       const fileRows = db.prepare(query).all(...params) as any[];
