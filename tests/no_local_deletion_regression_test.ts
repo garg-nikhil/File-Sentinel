@@ -43,6 +43,17 @@ async function runNoLocalDeletionRegressionTest() {
     const { getDatabase } = await import('../backend/db.js');
     const db = getDatabase();
 
+    db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run('org-default-dev', 'Default Dev Organization', new Date().toISOString());
+    db.prepare(`
+      INSERT OR REPLACE INTO licenses (license_id, organization_id, plan_id, status, issued_at, starts_at, expires_at, max_users, max_devices, scan_limit, feature_flags, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run('lic-test-regression', 'org-default-dev', 'plan-enterprise', 'ACTIVE', new Date().toISOString(), new Date().toISOString(), new Date(Date.now() + 86400000 * 365).toISOString(), 10, 10, -1, JSON.stringify(['LOCAL_SCANNING', 'CLOUD_UPLOADS', 'CLOUD_EVIDENCE_UPLOAD', 'AUDIT_ENGINE']), new Date().toISOString(), new Date().toISOString());
+
+    db.prepare(`
+      INSERT OR IGNORE INTO scans (scan_id, root_path, start_time, status, org_id, user_id)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run('scan_test', tempDir, new Date().toISOString(), 'COMPLETED', 'org-default-dev', 'user-default-dev');
+
     const fileId = 'FILE-0123';
     db.prepare(`
       INSERT OR REPLACE INTO files (file_id, scan_id, path, filename, extension, size, sha256, classification, risk_score, scan_status)

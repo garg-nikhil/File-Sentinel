@@ -42,9 +42,14 @@ async function runPhase2LicensingTests() {
   const now = new Date().toISOString();
   db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(orgTestId, 'Test Trial Org', now);
 
+  const sysLogin = await request(app)
+    .post('/api/auth/login')
+    .send({ username: 'sysadmin', password: 'SysAdmin123!' });
+  const sysToken = sysLogin.body.token;
+
   const issueRes = await request(app)
     .post('/api/admin/licenses/issue')
-    .set('x-admin-key', 'filesentinel-internal-admin-key-secure')
+    .set('Authorization', `Bearer ${sysToken}`)
     .send({
       organization_id: orgTestId,
       plan_id: 'plan-starter-trial',
@@ -56,7 +61,7 @@ async function runPhase2LicensingTests() {
     });
 
   assert.strictEqual(issueRes.status, 200, 'Admin license issuance succeeds');
-  const trialLicense = issueRes.body.license;
+  const trialLicense = db.prepare('SELECT * FROM licenses WHERE organization_id = ?').get(orgTestId) as any;
   assert.strictEqual(trialLicense.status, 'TRIAL');
   assert.strictEqual(trialLicense.max_devices, 2);
   assert.strictEqual(trialLicense.scan_limit, 2);
@@ -190,7 +195,7 @@ async function runPhase2LicensingTests() {
   // Test 9: Extension of license via Admin API
   const extendRes = await request(app)
     .post(`/api/admin/licenses/lic-expired-test/extend`)
-    .set('x-admin-key', 'filesentinel-internal-admin-key-secure')
+    .set('Authorization', `Bearer ${sysToken}`)
     .send({ additional_days: 30 });
   assert.strictEqual(extendRes.status, 200, 'Extension succeeded');
   assert.ok(extendRes.body.new_expires_at, 'New expiration date returned');

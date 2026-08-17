@@ -575,12 +575,12 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       );
     }
 
-    // Seed default organization, user, device, and license if none exist
-    const orgCheck = db.prepare('SELECT COUNT(*) as count FROM organizations').get() as { count: number };
-    if (orgCheck.count === 0) {
+    // Seed default organization, user, device, and license if devadmin does not exist
+    const devAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE username = 'devadmin'").get() as { count: number };
+    if (devAdminCheck.count === 0) {
       const defaultOrgId = 'org-default-dev';
       const now = new Date().toISOString();
-      db.prepare('INSERT INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(defaultOrgId, 'Default Dev Organization', now);
+      db.prepare('INSERT OR IGNORE INTO organizations (org_id, name, created_at) VALUES (?, ?, ?)').run(defaultOrgId, 'Default Dev Organization', now);
 
       const defaultUserId = 'user-default-dev';
       const salt = crypto.randomBytes(16).toString('hex');

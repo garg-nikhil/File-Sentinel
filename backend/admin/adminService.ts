@@ -124,6 +124,7 @@ export class AdminService {
   public issueLicense(params: {
     organization_id: string;
     plan_id: string;
+    status?: string;
     duration_days?: number;
     max_users?: number;
     max_devices?: number;
@@ -142,17 +143,19 @@ export class AdminService {
     const maxUsers = params.max_users ?? plan.max_users;
     const maxDevices = params.max_devices ?? plan.max_devices;
     const scanLimit = params.scan_limit ?? plan.scan_limit;
+    const licenseStatus = params.status || 'ACTIVE';
 
     this.db.prepare(`
       INSERT INTO licenses (
         license_id, organization_id, plan_id, status, issued_at, starts_at, expires_at,
         grace_until, max_users, max_devices, scan_limit, scans_used, feature_flags,
         created_at, updated_at
-      ) VALUES (?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
     `).run(
       licenseId,
       params.organization_id,
       params.plan_id,
+      licenseStatus,
       now,
       now,
       expiresAt,
@@ -183,7 +186,7 @@ export class AdminService {
     const newExpiry = new Date(Math.max(Date.now(), currentExpiry) + additionalDays * 24 * 3600 * 1000).toISOString();
     const newGrace = new Date(new Date(newExpiry).getTime() + 7 * 24 * 3600 * 1000).toISOString();
 
-    this.db.prepare('UPDATE licenses SET expires_at = ?, grace_until = ?, updated_at = ? WHERE license_id = ?').run(newExpiry, newGrace, new Date().toISOString(), licenseId);
+    this.db.prepare('UPDATE licenses SET expires_at = ?, grace_until = ?, status = ?, updated_at = ? WHERE license_id = ?').run(newExpiry, newGrace, 'ACTIVE', new Date().toISOString(), licenseId);
     logSecurityEvent('ADMIN_LICENSE_EXTENDED', 'SUCCESS', lic.organization_id, adminUserId, undefined, { licenseId, newExpiry }, this.db);
     return { success: true, new_expires_at: newExpiry };
   }

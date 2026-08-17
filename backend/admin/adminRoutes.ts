@@ -174,13 +174,14 @@ export function createAdminRouter(db: any): Router {
 
   router.post('/licenses/issue', (req: Request, res: Response) => {
     try {
-      const { organization_id, plan_id, duration_days, max_users, max_devices, scan_limit } = req.body;
+      const { organization_id, plan_id, status, duration_days, max_users, max_devices, scan_limit } = req.body;
       if (!organization_id || !plan_id) {
         return res.status(400).json({ error: 'organization_id and plan_id are required' });
       }
       const result = adminService.issueLicense({
         organization_id,
         plan_id,
+        status,
         duration_days,
         max_users,
         max_devices,
