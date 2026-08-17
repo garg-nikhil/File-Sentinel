@@ -2248,21 +2248,35 @@ export function createApiRouter(customDb?: any) {
    * SECURITY ENFORCEMENT MIDDLEWARE: Endpoint Assessment Production Sanitizer
    * 
    * Strict Security Mandate:
-   * 1. Rejects any incoming payload containing mock/diagnostic parameters ('mockWindowsUsbData', 'platformOverride', 'customWebTargets') with HTTP 400.
-   * 2. Defensive In-Depth Stripping: Deletes any lingering diagnostic keys from req.body to prevent downstream leakage.
-   * 3. Enforces that only authentic, real local detection logic is executed against the host OS.
+   * 1. Rejects any incoming payload containing 'deviceId' in req.body with HTTP 400.
+   *    (The physical endpoint being assessed must be bound to the authenticated session;
+   *     a client must never be able to label the physical machine being inspected as another device).
+   * 2. Rejects any incoming payload containing mock/diagnostic parameters ('mockWindowsUsbData', 'platformOverride', 'customWebTargets', 'mockData', 'mockUsbData') with HTTP 400.
+   * 3. Defensive In-Depth Stripping: Deletes any lingering diagnostic keys from req.body to prevent downstream leakage.
+   * 4. Enforces that only authentic, real local detection logic is executed against the host OS.
    */
   const enforceEndpointProductionSecurity = (req: Request, res: Response, next: NextFunction) => {
     const userOrgId = req.user?.orgId || 'UNKNOWN_ORG';
     const userId = req.user?.userId || 'UNKNOWN_USER';
-    const requestedDeviceId = (req.body?.deviceId as string) || req.user?.deviceId || 'UNKNOWN_DEVICE';
+    const sessionDeviceId = req.user?.deviceId || 'UNKNOWN_DEVICE';
 
-    // List of forbidden diagnostic/mock keys
+    // 1. Explicitly reject deviceId in request body
+    if (req.body && req.body.deviceId !== undefined) {
+      logSecEvent('FABRICATED_DEVICE_IDENTITY_REJECTED', 'FAILURE', userOrgId, userId, sessionDeviceId, {
+        suppliedDeviceId: req.body.deviceId,
+        enforcement: 'SESSION_DEVICE_IDENTITY_ENFORCEMENT'
+      });
+      return res.status(400).json({
+        error: 'Invalid parameter: deviceId must not be supplied in request body. The endpoint being assessed is strictly bound to the authenticated device session.'
+      });
+    }
+
+    // 2. List of forbidden diagnostic/mock keys
     const forbiddenMockFields = ['mockWindowsUsbData', 'platformOverride', 'customWebTargets', 'mockData', 'mockUsbData'];
 
     for (const field of forbiddenMockFields) {
       if (req.body && req.body[field] !== undefined) {
-        logSecEvent('FABRICATED_DETECTION_PAYLOAD_REJECTED', 'FAILURE', userOrgId, userId, requestedDeviceId, {
+        logSecEvent('FABRICATED_DETECTION_PAYLOAD_REJECTED', 'FAILURE', userOrgId, userId, sessionDeviceId, {
           parameter: field,
           enforcement: 'STRICT_LOCAL_ONLY_SECURITY_POLICY'
         });
@@ -2274,6 +2288,7 @@ export function createApiRouter(customDb?: any) {
 
     // Defensive in-depth stripping of potential proto/mock pollution
     if (req.body && typeof req.body === 'object') {
+      delete req.body.deviceId;
       delete req.body.mockWindowsUsbData;
       delete req.body.platformOverride;
       delete req.body.customWebTargets;
@@ -2299,30 +2314,33 @@ export function createApiRouter(customDb?: any) {
       try {
         const userOrgId = req.user!.orgId;
         const userId = req.user!.userId;
-        const requestedDeviceId = (req.body.deviceId as string) || req.user!.deviceId;
+        const deviceId = req.user?.deviceId;
 
-        if (!requestedDeviceId) {
+        if (!deviceId || typeof deviceId !== 'string' || deviceId.trim().length === 0) {
+          logSecEvent('DEVICE_IDENTITY_UNAVAILABLE', 'FAILURE', userOrgId, userId, 'UNKNOWN_DEVICE', {
+            reason: 'NO_AUTHENTICATED_DEVICE_IN_SESSION'
+          });
           return res.status(400).json({
-            error: 'DEVICE_IDENTITY_UNAVAILABLE: No trusted device identifier provided or associated with session.'
+            error: 'DEVICE_IDENTITY_UNAVAILABLE: No trusted device identifier associated with the authenticated session.'
           });
         }
 
         // Validate device exists and belongs to this organization
         const deviceRow = db.prepare(`
           SELECT device_id, org_id, revoked FROM devices WHERE device_id = ?
-        `).get(requestedDeviceId) as { device_id: string; org_id: string; revoked: number } | undefined;
+        `).get(deviceId) as { device_id: string; org_id: string; revoked: number } | undefined;
 
         if (!deviceRow) {
-          logSecEvent('ENDPOINT_ASSESSMENT_DENIED', 'FAILURE', userOrgId, userId, requestedDeviceId, {
+          logSecEvent('ENDPOINT_ASSESSMENT_DENIED', 'FAILURE', userOrgId, userId, deviceId, {
             reason: 'DEVICE_NOT_FOUND'
           });
           return res.status(403).json({
-            error: `Forbidden: Device '${requestedDeviceId}' is not registered.`
+            error: `Forbidden: Device '${deviceId}' is not registered.`
           });
         }
 
         if (deviceRow.org_id !== userOrgId) {
-          logSecEvent('CROSS_TENANT_ENDPOINT_ATTEMPT', 'FAILURE', userOrgId, userId, requestedDeviceId, {
+          logSecEvent('CROSS_TENANT_ENDPOINT_ATTEMPT', 'FAILURE', userOrgId, userId, deviceId, {
             targetOrg: deviceRow.org_id
           });
           return res.status(403).json({
@@ -2331,7 +2349,7 @@ export function createApiRouter(customDb?: any) {
         }
 
         if (deviceRow.revoked === 1) {
-          logSecEvent('REVOKED_DEVICE_ASSESSMENT_ATTEMPT', 'FAILURE', userOrgId, userId, requestedDeviceId);
+          logSecEvent('REVOKED_DEVICE_ASSESSMENT_ATTEMPT', 'FAILURE', userOrgId, userId, deviceId);
           return res.status(403).json({
             error: 'Forbidden: Device registration is revoked.'
           });
@@ -2343,11 +2361,11 @@ export function createApiRouter(customDb?: any) {
         const assessment = await endpointEngine.runAssessment({
           orgId: userOrgId,
           userId,
-          deviceId: requestedDeviceId
+          deviceId
         });
 
         // Audit & telemetry recording
-        logSecEvent('ENDPOINT_ASSESSMENT_COMPLETED', 'SUCCESS', userOrgId, userId, requestedDeviceId, {
+        logSecEvent('ENDPOINT_ASSESSMENT_COMPLETED', 'SUCCESS', userOrgId, userId, deviceId, {
           assessmentId: assessment.id,
           overallStatus: assessment.overall_status,
           usbStatus: assessment.usb_result.status

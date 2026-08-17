@@ -7,6 +7,7 @@
  * - Pure discovery, classification, reporting, and evidence generation
  */
 
+import os from 'node:os';
 import { DatabaseSync } from 'node:sqlite';
 import crypto from 'node:crypto';
 import { getDatabase } from '../db.js';
@@ -18,7 +19,8 @@ import {
   AssessmentOverallStatus,
   WebTargetResult,
   USBDetectionResult,
-  EndpointRuntimeProvider
+  EndpointRuntimeProvider,
+  EndpointPlatform
 } from './endpointTypes.js';
 import { USBDetector, USBDetectorConfig } from './usbDetector.js';
 import { WebAccessDetector, WebAccessDetectorOptions } from './webAccessDetector.js';
@@ -26,17 +28,27 @@ import { EndpointEvidenceGenerator } from './endpointEvidence.js';
 
 export const APPLICATION_VERSION = '8.2.0-PhaseA';
 
+function detectHostPlatform(): EndpointPlatform {
+  const current = os.platform();
+  if (current === 'win32') return 'windows';
+  if (current === 'linux') return 'linux';
+  if (current === 'darwin') return 'darwin';
+  return 'unsupported';
+}
+
+const currentHostPlatform = detectHostPlatform();
+
 /**
- * Local Windows Agent Runtime Abstraction.
+ * Local Endpoint Agent Runtime Abstraction.
  * In Phase A, detection probes execute locally on the host machine where the application
  * or local agent daemon is running. Cloud-hosted instances cannot directly inspect client
  * physical hardware without an installed local agent provider.
  */
 export const LOCAL_WINDOWS_AGENT_RUNTIME: EndpointRuntimeProvider = {
   type: 'LOCAL_WINDOWS_AGENT',
-  platform: 'windows',
+  platform: currentHostPlatform,
   isLocalExecution: true,
-  runtimeDescription: 'Local FileSentinel agent runtime running directly on the monitored Windows endpoint machine.'
+  runtimeDescription: `Local FileSentinel agent runtime running directly on the monitored ${currentHostPlatform} endpoint machine.`
 };
 
 export class EndpointComplianceEngine {
@@ -49,13 +61,20 @@ export class EndpointComplianceEngine {
   constructor(db?: DatabaseSync, options: EndpointDetectorOptions = {}) {
     this.db = db || getDatabase();
     this.options = options;
-    this.runtimeProvider = LOCAL_WINDOWS_AGENT_RUNTIME;
 
     const usbConfig: USBDetectorConfig = {
       platformOverride: options.platformOverride,
       mockResult: options.mockWindowsUsbData
     };
     this.usbDetector = new USBDetector(usbConfig);
+
+    const detectedPlatform = this.usbDetector.getPlatform();
+    this.runtimeProvider = {
+      type: 'LOCAL_WINDOWS_AGENT',
+      platform: detectedPlatform,
+      isLocalExecution: true,
+      runtimeDescription: `Local FileSentinel agent runtime running directly on the monitored ${detectedPlatform} endpoint machine.`
+    };
 
     const webConfig: WebAccessDetectorOptions = {
       targets: options.customWebTargets,

@@ -693,20 +693,24 @@ async function runEndpointComplianceTestSuite() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenB}`)
-      .send({ orgId: orgA, deviceId: deviceA });
-    assert.strictEqual(res.status, 403, 'Cross-tenant device assessment must be rejected with 403');
-    console.log('  [PASS] Test 32: Forged Cross-Tenant Assessment Attempt Blocked (403)');
+      .send({});
+    // Tenant B session uses deviceB in orgB, so it assesses deviceB in orgB successfully
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.body.org_id, orgB);
+    assert.strictEqual(res.body.device_id, deviceB);
+    console.log('  [PASS] Test 32: Tenant B Scoped Strictly to Tenant B Organization & Device');
     passedTests++;
   }
 
-  // Test 33: Forged / Unregistered Device ID Rejected
+  // Test 33: Body Device ID Parameter Rejected
   {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({ deviceId: 'dev-nonexistent-999' });
-    assert.strictEqual(res.status, 403, 'Unregistered device must be rejected with 403');
-    console.log('  [PASS] Test 33: Unregistered Device ID Rejected (403)');
+    assert.strictEqual(res.status, 400, 'Supplying deviceId in request body must be rejected with 400');
+    assert.ok(res.body.error && res.body.error.includes('deviceId'));
+    console.log('  [PASS] Test 33: Request Body Device ID Parameter Rejected (400)');
     passedTests++;
   }
 
@@ -715,7 +719,7 @@ async function runEndpointComplianceTestSuite() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenViewerA}`)
-      .send({ deviceId: deviceA });
+      .send({});
     assert.strictEqual(res.status, 403, 'VIEWER role must be rejected with 403');
     console.log('  [PASS] Test 34: Unauthorized Role Rejected (VIEWER -> 403)');
     passedTests++;
@@ -726,7 +730,7 @@ async function runEndpointComplianceTestSuite() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenDisabled}`)
-      .send({ deviceId: deviceA });
+      .send({});
     assert.strictEqual(res.status, 403, 'Disabled user must be rejected with 403');
     console.log('  [PASS] Test 35: Disabled User Account Blocked (403)');
     passedTests++;
@@ -737,7 +741,7 @@ async function runEndpointComplianceTestSuite() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenRevoked}`)
-      .send({ deviceId: deviceRevoked });
+      .send({});
     assert.strictEqual(res.status, 403, 'Revoked device must be rejected with 403');
     console.log('  [PASS] Test 36: Revoked Device Registration Blocked (403)');
     passedTests++;
@@ -835,7 +839,6 @@ async function runEndpointComplianceTestSuite() {
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        deviceId: deviceA,
         mockWindowsUsbData: {
           status: 'DISABLED',
           confidence: 'HIGH'
@@ -854,7 +857,6 @@ async function runEndpointComplianceTestSuite() {
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        deviceId: deviceA,
         platformOverride: 'windows'
       });
 
@@ -870,7 +872,6 @@ async function runEndpointComplianceTestSuite() {
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        deviceId: deviceA,
         customWebTargets: sampleTestTargets
       });
 
@@ -892,7 +893,6 @@ async function runEndpointComplianceTestSuite() {
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        deviceId: deviceA,
         linkAuditSessionId: auditSessionId,
         mockWindowsUsbData: {
           status: 'DISABLED',
@@ -921,7 +921,6 @@ async function runEndpointComplianceTestSuite() {
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
-        deviceId: deviceA,
         linkAuditSessionId: auditSessionId,
         mockWindowsUsbData: {
           status: 'ENABLED',
@@ -948,9 +947,7 @@ async function runEndpointComplianceTestSuite() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
-      .send({
-        deviceId: deviceA
-      });
+      .send({});
 
     assert.strictEqual(res.status, 200, 'Production API should execute real assessment successfully');
     assert.ok(res.body.id.startsWith('EP-ASM-'), 'Assessment ID must follow EP-ASM- format');
