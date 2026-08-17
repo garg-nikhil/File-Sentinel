@@ -8,11 +8,115 @@ import {
   USBDetectionResult,
   WebTargetResult,
   DetectionCategory,
-  CategorySummary
+  CategorySummary,
+  AssessmentOverallStatus
 } from './endpointTypes.js';
 import { EvidenceItem } from '../audit/models.js';
 
+export interface AggregateAssessmentInput {
+  id?: string;
+  org_id: string;
+  device_id: string;
+  user_id: string;
+  timestamp?: string;
+  platform?: string;
+  application_version?: string;
+  usb_result: USBDetectionResult;
+  web_results: WebTargetResult[];
+}
+
 export class EndpointEvidenceGenerator {
+  /**
+   * Aggregate detection results into a structured EndpointAssessment report
+   */
+  public static aggregateAssessment(input: AggregateAssessmentInput): EndpointAssessment {
+    const id = input.id || `ea-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const timestamp = input.timestamp || new Date().toISOString();
+    const platform = input.platform || input.usb_result.platform || 'windows';
+    const application_version = input.application_version || '1.0.0-phaseA';
+
+    // Calculate category summaries
+    const category_summaries: Record<DetectionCategory, CategorySummary> = {
+      USB_STORAGE: {
+        total: 1,
+        accessible: input.usb_result.status === 'ENABLED' ? 1 : 0,
+        blocked: input.usb_result.status === 'DISABLED' ? 1 : 0,
+        indeterminate: ['UNKNOWN', 'REQUIRES_ELEVATION', 'UNSUPPORTED_PLATFORM', 'NOT_PRESENT'].includes(input.usb_result.status) ? 1 : 0
+      },
+      SOCIAL_MEDIA: { total: 0, accessible: 0, blocked: 0, indeterminate: 0 },
+      PERSONAL_EMAIL: { total: 0, accessible: 0, blocked: 0, indeterminate: 0 },
+      MESSAGING: { total: 0, accessible: 0, blocked: 0, indeterminate: 0 },
+      CLOUD_STORAGE: { total: 0, accessible: 0, blocked: 0, indeterminate: 0 }
+    };
+
+    for (const r of input.web_results) {
+      if (!category_summaries[r.category]) {
+        category_summaries[r.category] = { total: 0, accessible: 0, blocked: 0, indeterminate: 0 };
+      }
+      category_summaries[r.category].total++;
+      if (r.status === 'ACCESSIBLE') {
+        category_summaries[r.category].accessible++;
+      } else if (r.status === 'BLOCKED') {
+        category_summaries[r.category].blocked++;
+      } else {
+        category_summaries[r.category].indeterminate++;
+      }
+    }
+
+    // Determine overall compliance status
+    // Compliant = USB disabled AND (all web categories blocked or 0 accessible)
+    let totalAccessible = 0;
+    let totalIndeterminate = 0;
+
+    if (input.usb_result.status === 'ENABLED') {
+      totalAccessible++;
+    } else if (input.usb_result.status !== 'DISABLED') {
+      totalIndeterminate++;
+    }
+
+    for (const cat of ['SOCIAL_MEDIA', 'PERSONAL_EMAIL', 'MESSAGING', 'CLOUD_STORAGE'] as DetectionCategory[]) {
+      const sum = category_summaries[cat];
+      totalAccessible += sum.accessible;
+      totalIndeterminate += sum.indeterminate;
+    }
+
+    let overall_status: AssessmentOverallStatus = 'COMPLIANT';
+    if (totalAccessible > 0) {
+      overall_status = 'NON_COMPLIANT';
+    } else if (totalIndeterminate > 0 || input.usb_result.status === 'UNKNOWN') {
+      overall_status = 'ATTENTION_REQUIRED';
+    }
+
+    const assessmentContext = {
+      id,
+      org_id: input.org_id,
+      device_id: input.device_id,
+      timestamp,
+      platform,
+      application_version,
+      usb_result: input.usb_result,
+      web_results: input.web_results,
+      category_summaries
+    };
+
+    const evidence_text = this.generateEvidenceText(assessmentContext);
+
+    return {
+      id,
+      org_id: input.org_id,
+      device_id: input.device_id,
+      user_id: input.user_id,
+      timestamp,
+      platform,
+      application_version,
+      overall_status,
+      usb_result: input.usb_result,
+      web_results: input.web_results,
+      category_summaries,
+      evidence_text,
+      created_at: timestamp
+    };
+  }
   /**
    * Generate human-readable, deterministic audit evidence text
    */

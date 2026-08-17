@@ -22,8 +22,9 @@ import { VerifiableAuditReportService } from './audit/verifiableReportService.js
 import { createAdminRouter } from './admin/adminRoutes.js';
 import { PilotService } from './pilotService.js';
 import { EndpointComplianceEngine } from './endpoint/endpointDetector.js';
-import { DEFAULT_WEB_TARGETS } from './endpoint/webAccessDetector.js';
+import { DEFAULT_WEB_TARGETS, validateAndSanitizeTarget } from './endpoint/webAccessDetector.js';
 import { EndpointEvidenceGenerator } from './endpoint/endpointEvidence.js';
+import { WebAccessTarget } from './endpoint/endpointTypes.js';
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -2295,15 +2296,30 @@ export function createApiRouter(customDb?: any) {
           });
         }
 
-        // Check if test mocks were passed in body (for automated testing / CI)
+        // Check if test mocks or custom targets were passed in body
         const mockWindowsUsbData = req.body.mockWindowsUsbData;
         const platformOverride = req.body.platformOverride;
-        const customWebTargets = req.body.customWebTargets;
+        
+        let validatedCustomTargets: WebAccessTarget[] | undefined;
+        if (req.body.customWebTargets) {
+          if (!Array.isArray(req.body.customWebTargets)) {
+            return res.status(400).json({ error: 'customWebTargets must be an array of target definitions' });
+          }
+          // Only ORG_ADMIN or SYS_ADMIN may supply custom targets
+          if (req.user!.role !== 'ORG_ADMIN' && req.user!.role !== 'SYS_ADMIN') {
+            return res.status(403).json({ error: 'Forbidden: Custom web targets require ORG_ADMIN privileges' });
+          }
+          try {
+            validatedCustomTargets = req.body.customWebTargets.map((t: any) => validateAndSanitizeTarget(t));
+          } catch (valErr: any) {
+            return res.status(400).json({ error: `Invalid customWebTargets: ${valErr?.message}` });
+          }
+        }
 
         const endpointEngine = new EndpointComplianceEngine(db, {
           platformOverride,
           mockWindowsUsbData,
-          customWebTargets
+          customWebTargets: validatedCustomTargets
         });
 
         const assessment = await endpointEngine.runAssessment({

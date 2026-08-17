@@ -594,6 +594,8 @@ export interface USBDetectionResult {
   errorMessage?: string;
 }
 
+export type USBDetectorResult = USBDetectionResult;
+
 export interface WebAccessTarget {
   id: string;
   category: WebAccessCategory;

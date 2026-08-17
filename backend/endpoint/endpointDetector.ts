@@ -17,7 +17,8 @@ import {
   CategorySummary,
   AssessmentOverallStatus,
   WebTargetResult,
-  USBDetectionResult
+  USBDetectionResult,
+  EndpointRuntimeProvider
 } from './endpointTypes.js';
 import { USBDetector, USBDetectorConfig } from './usbDetector.js';
 import { WebAccessDetector, WebAccessDetectorOptions } from './webAccessDetector.js';
@@ -25,15 +26,30 @@ import { EndpointEvidenceGenerator } from './endpointEvidence.js';
 
 export const APPLICATION_VERSION = '8.2.0-PhaseA';
 
+/**
+ * Local Windows Agent Runtime Abstraction.
+ * In Phase A, detection probes execute locally on the host machine where the application
+ * or local agent daemon is running. Cloud-hosted instances cannot directly inspect client
+ * physical hardware without an installed local agent provider.
+ */
+export const LOCAL_WINDOWS_AGENT_RUNTIME: EndpointRuntimeProvider = {
+  type: 'LOCAL_WINDOWS_AGENT',
+  platform: 'windows',
+  isLocalExecution: true,
+  runtimeDescription: 'Local FileSentinel agent runtime running directly on the monitored Windows endpoint machine.'
+};
+
 export class EndpointComplianceEngine {
   private db: DatabaseSync;
   private usbDetector: USBDetector;
   private webDetector: WebAccessDetector;
   private options: EndpointDetectorOptions;
+  private runtimeProvider: EndpointRuntimeProvider;
 
   constructor(db?: DatabaseSync, options: EndpointDetectorOptions = {}) {
     this.db = db || getDatabase();
     this.options = options;
+    this.runtimeProvider = LOCAL_WINDOWS_AGENT_RUNTIME;
 
     const usbConfig: USBDetectorConfig = {
       platformOverride: options.platformOverride,
@@ -50,6 +66,10 @@ export class EndpointComplianceEngine {
       concurrencyLimit: options.concurrencyLimit
     };
     this.webDetector = new WebAccessDetector(webConfig);
+  }
+
+  public getRuntimeProvider(): EndpointRuntimeProvider {
+    return this.runtimeProvider;
   }
 
   public getUsbDetector(): USBDetector {

@@ -7,6 +7,11 @@
  * - NO firewall rule modifications
  * - NO proxy configuration changes
  * - NO browser history or personal data inspection
+ *
+ * LOCAL AGENT ARCHITECTURE:
+ * - Note: This detection logic executes on the host endpoint machine running
+ *   the FileSentinel backend or local agent daemon.
+ * - Read-only HTTPS / DNS probes are conducted strictly for compliance verification.
  */
 
 import https from 'node:https';
@@ -22,6 +27,95 @@ import {
   DetectionMethod
 } from './endpointTypes.js';
 
+/**
+ * Validates whether a hostname belongs to the approved domain registry.
+ * Uses exact match or suffix-dot matching to prevent lookalike domains (e.g. evil-facebook.com).
+ */
+export function isDomainAllowed(hostname: string, allowedDomains: string[]): boolean {
+  if (!hostname || !allowedDomains || allowedDomains.length === 0) {
+    return false;
+  }
+  const cleanHost = hostname.toLowerCase().trim();
+  return allowedDomains.some((allowed) => {
+    const cleanAllowed = allowed.toLowerCase().trim();
+    return cleanHost === cleanAllowed || cleanHost.endsWith('.' + cleanAllowed);
+  });
+}
+
+/**
+ * Validates and sanitizes a custom web access target if configured by an authorized tenant admin.
+ * Blocks localhost, private IP ranges, loopback, and metadata-service addresses.
+ */
+export function validateAndSanitizeTarget(target: Partial<WebAccessTarget>): WebAccessTarget {
+  if (!target || typeof target !== 'object') {
+    throw new Error('Target definition must be a valid object');
+  }
+
+  if (!target.id || typeof target.id !== 'string') {
+    throw new Error('Target id is required and must be a string');
+  }
+
+  const validCategories: WebAccessCategory[] = ['SOCIAL_MEDIA', 'PERSONAL_EMAIL', 'MESSAGING', 'CLOUD_STORAGE'];
+  if (!target.category || !validCategories.includes(target.category)) {
+    throw new Error(`Target category must be one of: ${validCategories.join(', ')}`);
+  }
+
+  if (!target.service_name || typeof target.service_name !== 'string' || target.service_name.trim().length === 0) {
+    throw new Error('Target service_name is required');
+  }
+
+  if (!target.probe_url || typeof target.probe_url !== 'string') {
+    throw new Error('Target probe_url is required');
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(target.probe_url);
+  } catch (err: any) {
+    throw new Error(`Invalid probe_url: ${err?.message || 'Malformed URL'}`);
+  }
+
+  // Strictly enforce HTTPS protocol
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`Probe URL protocol must be HTTPS (received ${parsed.protocol})`);
+  }
+
+  const host = parsed.hostname.toLowerCase();
+
+  // Prevent probing loopback, localhost, and metadata IP ranges
+  const forbiddenHosts = ['localhost', '127.0.0.1', '0.0.0.0', '::1', '169.254.169.254'];
+  if (forbiddenHosts.includes(host) || host.startsWith('127.') || host.startsWith('169.254.')) {
+    throw new Error(`Probe URL host '${host}' is forbidden (localhost/metadata prohibited)`);
+  }
+
+  // Prevent private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+  if (/^10\./.test(host) || /^192\.168\./.test(host) || /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(host)) {
+    throw new Error(`Probe URL host '${host}' is forbidden (private network address prohibited)`);
+  }
+
+  const primaryDomain = target.primary_domain?.toLowerCase().trim() || host;
+  const expectedIdentifiers = Array.isArray(target.expected_identifiers) && target.expected_identifiers.length > 0
+    ? target.expected_identifiers.map(s => String(s).trim())
+    : [primaryDomain];
+
+  const allowedDomains = Array.isArray(target.allowed_domains) && target.allowed_domains.length > 0
+    ? target.allowed_domains.map(d => String(d).toLowerCase().trim())
+    : [primaryDomain];
+
+  return {
+    id: target.id.trim(),
+    category: target.category,
+    service_name: target.service_name.trim(),
+    primary_domain: primaryDomain,
+    probe_url: target.probe_url.trim(),
+    expected_identifiers: expectedIdentifiers,
+    allowed_domains: allowedDomains
+  };
+}
+
+/**
+ * Server-controlled default targets with hardened allowed domain registries
+ */
 export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
   // --- SOCIAL MEDIA ---
   {
@@ -30,7 +124,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Facebook',
     primary_domain: 'facebook.com',
     probe_url: 'https://www.facebook.com',
-    expected_identifiers: ['facebook', 'fb', 'meta']
+    expected_identifiers: ['facebook', 'fb', 'meta'],
+    allowed_domains: ['facebook.com', 'fb.com', 'meta.com']
   },
   {
     id: 'soc-ig',
@@ -38,7 +133,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Instagram',
     primary_domain: 'instagram.com',
     probe_url: 'https://www.instagram.com',
-    expected_identifiers: ['instagram']
+    expected_identifiers: ['instagram'],
+    allowed_domains: ['instagram.com', 'cdninstagram.com']
   },
   {
     id: 'soc-x',
@@ -46,7 +142,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'X',
     primary_domain: 'x.com',
     probe_url: 'https://x.com',
-    expected_identifiers: ['x.com', 'twitter']
+    expected_identifiers: ['x.com', 'twitter'],
+    allowed_domains: ['x.com', 'twitter.com', 'twimg.com']
   },
   {
     id: 'soc-li',
@@ -54,7 +151,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'LinkedIn',
     primary_domain: 'linkedin.com',
     probe_url: 'https://www.linkedin.com',
-    expected_identifiers: ['linkedin']
+    expected_identifiers: ['linkedin'],
+    allowed_domains: ['linkedin.com', 'licdn.com']
   },
   {
     id: 'soc-rd',
@@ -62,7 +160,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Reddit',
     primary_domain: 'reddit.com',
     probe_url: 'https://www.reddit.com',
-    expected_identifiers: ['reddit']
+    expected_identifiers: ['reddit'],
+    allowed_domains: ['reddit.com', 'redd.it']
   },
   {
     id: 'soc-tt',
@@ -70,7 +169,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'TikTok',
     primary_domain: 'tiktok.com',
     probe_url: 'https://www.tiktok.com',
-    expected_identifiers: ['tiktok']
+    expected_identifiers: ['tiktok'],
+    allowed_domains: ['tiktok.com', 'tiktokcdn.com']
   },
 
   // --- PERSONAL EMAIL ---
@@ -80,7 +180,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Gmail',
     primary_domain: 'mail.google.com',
     probe_url: 'https://mail.google.com',
-    expected_identifiers: ['google', 'gmail', 'accounts.google']
+    expected_identifiers: ['google', 'gmail', 'accounts.google'],
+    allowed_domains: ['google.com', 'googleusercontent.com', 'gstatic.com']
   },
   {
     id: 'eml-yh',
@@ -88,7 +189,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Yahoo Mail',
     primary_domain: 'mail.yahoo.com',
     probe_url: 'https://mail.yahoo.com',
-    expected_identifiers: ['yahoo', 'login.yahoo']
+    expected_identifiers: ['yahoo', 'login.yahoo'],
+    allowed_domains: ['yahoo.com', 'yimg.com']
   },
   {
     id: 'eml-ol',
@@ -96,7 +198,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Outlook.com',
     primary_domain: 'outlook.live.com',
     probe_url: 'https://outlook.live.com',
-    expected_identifiers: ['outlook', 'live.com', 'microsoft']
+    expected_identifiers: ['outlook', 'live.com', 'microsoft'],
+    allowed_domains: ['live.com', 'microsoft.com', 'office.com', 'outlook.com', 'microsoftonline.com']
   },
   {
     id: 'eml-pr',
@@ -104,7 +207,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Proton Mail',
     primary_domain: 'mail.proton.me',
     probe_url: 'https://mail.proton.me',
-    expected_identifiers: ['proton', 'protonmail']
+    expected_identifiers: ['proton', 'protonmail'],
+    allowed_domains: ['proton.me', 'protonmail.com']
   },
   {
     id: 'eml-ic',
@@ -112,7 +216,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'iCloud Mail',
     primary_domain: 'www.icloud.com',
     probe_url: 'https://www.icloud.com/mail',
-    expected_identifiers: ['icloud', 'apple']
+    expected_identifiers: ['icloud', 'apple'],
+    allowed_domains: ['icloud.com', 'apple.com']
   },
 
   // --- MESSAGING ---
@@ -122,7 +227,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'WhatsApp Web',
     primary_domain: 'web.whatsapp.com',
     probe_url: 'https://web.whatsapp.com',
-    expected_identifiers: ['whatsapp']
+    expected_identifiers: ['whatsapp'],
+    allowed_domains: ['whatsapp.com', 'whatsapp.net']
   },
   {
     id: 'msg-tg',
@@ -130,7 +236,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Telegram Web',
     primary_domain: 'web.telegram.org',
     probe_url: 'https://web.telegram.org',
-    expected_identifiers: ['telegram']
+    expected_identifiers: ['telegram'],
+    allowed_domains: ['telegram.org', 't.me']
   },
   {
     id: 'msg-ms',
@@ -138,7 +245,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Messenger',
     primary_domain: 'www.messenger.com',
     probe_url: 'https://www.messenger.com',
-    expected_identifiers: ['messenger', 'facebook']
+    expected_identifiers: ['messenger', 'facebook'],
+    allowed_domains: ['messenger.com', 'facebook.com', 'fb.com', 'meta.com']
   },
   {
     id: 'msg-dc',
@@ -146,7 +254,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Discord',
     primary_domain: 'discord.com',
     probe_url: 'https://discord.com',
-    expected_identifiers: ['discord']
+    expected_identifiers: ['discord'],
+    allowed_domains: ['discord.com', 'discord.gg', 'discordapp.com']
   },
   {
     id: 'msg-sg',
@@ -154,7 +263,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Signal',
     primary_domain: 'signal.org',
     probe_url: 'https://signal.org',
-    expected_identifiers: ['signal']
+    expected_identifiers: ['signal'],
+    allowed_domains: ['signal.org']
   },
 
   // --- CLOUD STORAGE ---
@@ -164,7 +274,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Google Drive',
     primary_domain: 'drive.google.com',
     probe_url: 'https://drive.google.com',
-    expected_identifiers: ['google', 'drive', 'accounts.google']
+    expected_identifiers: ['google', 'drive', 'accounts.google'],
+    allowed_domains: ['google.com', 'googleusercontent.com', 'gstatic.com']
   },
   {
     id: 'cld-db',
@@ -172,7 +283,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Dropbox',
     primary_domain: 'www.dropbox.com',
     probe_url: 'https://www.dropbox.com',
-    expected_identifiers: ['dropbox']
+    expected_identifiers: ['dropbox'],
+    allowed_domains: ['dropbox.com', 'dropboxstatic.com']
   },
   {
     id: 'cld-od',
@@ -180,7 +292,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'OneDrive',
     primary_domain: 'onedrive.live.com',
     probe_url: 'https://onedrive.live.com',
-    expected_identifiers: ['onedrive', 'live.com', 'microsoft', 'sharepoint']
+    expected_identifiers: ['onedrive', 'live.com', 'microsoft', 'sharepoint'],
+    allowed_domains: ['live.com', 'microsoft.com', 'office.com', 'sharepoint.com', 'microsoftonline.com']
   },
   {
     id: 'cld-bx',
@@ -188,7 +301,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'Box',
     primary_domain: 'www.box.com',
     probe_url: 'https://www.box.com',
-    expected_identifiers: ['box.com', 'box']
+    expected_identifiers: ['box.com', 'box'],
+    allowed_domains: ['box.com', 'boxcdn.net']
   },
   {
     id: 'cld-ic',
@@ -196,7 +310,8 @@ export const DEFAULT_WEB_TARGETS: WebAccessTarget[] = [
     service_name: 'iCloud Drive',
     primary_domain: 'www.icloud.com',
     probe_url: 'https://www.icloud.com/iclouddrive',
-    expected_identifiers: ['icloud', 'apple']
+    expected_identifiers: ['icloud', 'apple'],
+    allowed_domains: ['icloud.com', 'apple.com']
   }
 ];
 
@@ -285,6 +400,21 @@ export class WebAccessDetector {
 
     try {
       const parsedUrl = new URL(target.probe_url);
+
+      // Enforce strict HTTPS requirement
+      if (parsedUrl.protocol !== 'https:') {
+        return {
+          category: target.category,
+          service: target.service_name,
+          target_domain: target.primary_domain,
+          status: 'INDETERMINATE',
+          confidence: 'LOW',
+          detectionMethod: 'HTTPS_PROBE',
+          reason: `Insecure probe URL protocol '${parsedUrl.protocol}' rejected. Only deterministic HTTPS signals are allowed.`,
+          responseTimeMs: Date.now() - startTime,
+          timestamp
+        };
+      }
 
       // Stage 1: DNS Resolution Check & Sinkhole Detection
       let dnsAddresses: string[] = [];
@@ -400,7 +530,7 @@ export class WebAccessDetector {
   }
 
   /**
-   * Internal bounded HTTPS client with strict redirects, timeout, size limits, and false-positive defense
+   * Internal bounded HTTPS client with strict redirects, domain validation, timeout, size limits, and false-positive defense
    */
   private performBoundedRequest(
     targetUrl: string,
@@ -416,7 +546,7 @@ export class WebAccessDetector {
           status: 'INDETERMINATE',
           confidence: 'LOW',
           detectionMethod: 'HTTPS_PROBE',
-          reason: 'Excessive redirects encountered during probe'
+          reason: `Excessive redirects encountered during probe (${redirectCount} > ${this.maxRedirects})`
         });
       }
 
@@ -435,13 +565,43 @@ export class WebAccessDetector {
         });
       }
 
-      const client = parsed.protocol === 'http:' ? http : https;
+      // Enforce strict HTTPS requirement
+      if (parsed.protocol !== 'https:') {
+        return resolve({
+          category: target.category,
+          service: target.service_name,
+          target_domain: target.primary_domain,
+          status: 'INDETERMINATE',
+          confidence: 'LOW',
+          detectionMethod: 'HTTPS_PROBE',
+          reason: `Insecure probe URL protocol '${parsed.protocol}' rejected. Only deterministic HTTPS probes are permitted.`
+        });
+      }
+
+      // Validate that the request domain is allowed for this target service
+      const allowedDomains = target.allowed_domains && target.allowed_domains.length > 0
+        ? target.allowed_domains
+        : [target.primary_domain];
+
+      if (!isDomainAllowed(parsed.hostname, allowedDomains)) {
+        return resolve({
+          category: target.category,
+          service: target.service_name,
+          target_domain: target.primary_domain,
+          status: 'INDETERMINATE',
+          confidence: 'LOW',
+          detectionMethod: 'HTTPS_PROBE',
+          reason: `Probe domain '${parsed.hostname}' does not match allowed domain set for ${target.service_name}`
+        });
+      }
+
+      const client = https;
       let settled = false;
 
       const req = client.request(
         {
           hostname: parsed.hostname,
-          port: parsed.port || (parsed.protocol === 'http:' ? 80 : 443),
+          port: parsed.port || 443,
           path: parsed.pathname + parsed.search,
           method: 'GET',
           headers: {
@@ -460,10 +620,13 @@ export class WebAccessDetector {
           // 1. Handle Redirects (301, 302, 303, 307, 308)
           if ([301, 302, 303, 307, 308].includes(statusCode) && location) {
             let nextUrl: string;
+            let nextParsed: URL;
             try {
               nextUrl = new URL(location, targetUrl).toString();
+              nextParsed = new URL(nextUrl);
             } catch {
               nextUrl = location;
+              nextParsed = parsed;
             }
 
             // Check for captive portal redirect (e.g. login.wifi, auth.gateway, captive)
@@ -496,12 +659,27 @@ export class WebAccessDetector {
               });
             }
 
-            // Valid target service redirect (e.g. http->https or domain alias)
+            // Validate that redirect hostname stays within the approved domain set
+            if (!isDomainAllowed(nextParsed.hostname, allowedDomains)) {
+              settled = true;
+              return resolve({
+                category: target.category,
+                service: target.service_name,
+                target_domain: target.primary_domain,
+                status: 'INDETERMINATE',
+                confidence: 'MEDIUM',
+                detectionMethod: 'HTTPS_PROBE',
+                httpStatusCode: statusCode,
+                reason: `Redirect target '${nextParsed.hostname}' left approved domain set for ${target.service_name}`
+              });
+            }
+
+            // Valid target service redirect within approved domain set
             settled = true;
             return this.performBoundedRequest(nextUrl, target, redirectCount + 1).then(resolve);
           }
 
-          // 2. Handle HTTP Status Blocks (403, 451, 502/503 from corporate proxy)
+          // 2. Handle HTTP Status Blocks (403, 451)
           if (statusCode === 451) {
             settled = true;
             return resolve({
@@ -585,7 +763,9 @@ export class WebAccessDetector {
   }
 
   /**
-   * Classify response body and headers with rigorous False-Positive and Block page recognition
+   * Classify response body and headers with rigorous False-Positive and Block page recognition.
+   * A response is ONLY ACCESSIBLE when deterministic evidence proves the response belongs to
+   * the requested target service. Large body length alone NEVER makes a target ACCESSIBLE.
    */
   public classifyResponse(
     statusCode: number,
@@ -667,7 +847,7 @@ export class WebAccessDetector {
       };
     }
 
-    // 4. Temporary Service Outage or Server Error
+    // 4. Temporary Service Outage or Server Error (HTTP 500..504)
     if (statusCode >= 500 && statusCode <= 504) {
       return {
         category: target.category,
@@ -681,14 +861,17 @@ export class WebAccessDetector {
       };
     }
 
-    // 5. Successful Status (HTTP 200, 204, 302 to authorized domain)
+    // 5. Successful Status (HTTP 200, 204, 302)
     if (statusCode >= 200 && statusCode < 400) {
-      // Validate that the content actually matches expected target identifiers
-      const matchesExpectedIdentifier = target.expected_identifiers.some(ident =>
-        lowerBody.includes(ident.toLowerCase()) || serverHeader.includes(ident.toLowerCase())
-      );
+      // Deterministic validation: must match expected target service signatures
+      const matchesExpectedIdentifier = target.expected_identifiers.length > 0 && target.expected_identifiers.some(ident => {
+        const cleanIdent = ident.toLowerCase().trim();
+        return lowerBody.includes(cleanIdent) || serverHeader.includes(cleanIdent);
+      });
 
-      if (matchesExpectedIdentifier || body.length > 500) {
+      // CRITICAL: A response is ACCESSIBLE ONLY when deterministic evidence matches the target service.
+      // Large generic body length (>500) MUST NOT trigger ACCESSIBLE.
+      if (matchesExpectedIdentifier) {
         return {
           category: target.category,
           service: target.service_name,
@@ -697,11 +880,11 @@ export class WebAccessDetector {
           confidence: 'HIGH',
           detectionMethod: 'HTTPS_PROBE',
           httpStatusCode: statusCode,
-          reason: `Target accessible with valid application response (HTTP ${statusCode})`
+          reason: `Target accessible with confirmed ${target.service_name} application signatures (HTTP ${statusCode})`
         };
       }
 
-      // Generic tiny 200 response with no identifying markers -> Indeterminate
+      // Generic response (no identifying signatures) -> INDETERMINATE (Never guess)
       return {
         category: target.category,
         service: target.service_name,
@@ -710,7 +893,7 @@ export class WebAccessDetector {
         confidence: 'MEDIUM',
         detectionMethod: 'HTTPS_PROBE',
         httpStatusCode: statusCode,
-        reason: `Generic HTTP ${statusCode} response without confirmed target service signatures`
+        reason: `Generic HTTP ${statusCode} response without confirmed ${target.service_name} signatures`
       };
     }
 

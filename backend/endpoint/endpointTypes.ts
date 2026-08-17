@@ -77,6 +77,8 @@ export interface USBDetectionResult {
   errorMessage?: string;
 }
 
+export type USBDetectorResult = USBDetectionResult;
+
 export interface WebAccessTarget {
   id: string;
   category: WebAccessCategory;
@@ -84,6 +86,16 @@ export interface WebAccessTarget {
   primary_domain: string;
   probe_url: string;
   expected_identifiers: string[];
+  allowed_domains?: string[];
+}
+
+export type EndpointRuntimeProviderType = 'LOCAL_WINDOWS_AGENT' | 'SIMULATED_TEST_RUNNER';
+
+export interface EndpointRuntimeProvider {
+  type: EndpointRuntimeProviderType;
+  platform: EndpointPlatform;
+  isLocalExecution: boolean;
+  runtimeDescription: string;
 }
 
 export interface WebTargetResult {
