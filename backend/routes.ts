@@ -720,7 +720,7 @@ export function createApiRouter(customDb?: any) {
 
   router.get('/scans', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
-    const rows = db.prepare('SELECT * FROM scans WHERE org_id = ? OR org_id IS NULL ORDER BY start_time DESC LIMIT 50').all(orgId);
+    const rows = db.prepare('SELECT * FROM scans WHERE org_id = ? ORDER BY start_time DESC LIMIT 50').all(orgId);
     res.json(rows);
   });
 
@@ -788,7 +788,7 @@ export function createApiRouter(customDb?: any) {
     }
 
     // Check scans table
-    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND (org_id = ? OR org_id IS NULL)').get(id, orgId);
+    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND org_id = ?').get(id, orgId);
     if (row) {
       return res.json(row);
     }
@@ -1440,11 +1440,9 @@ export function createApiRouter(customDb?: any) {
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
       }
-      if (sessionRow.scan_id) {
-        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
-        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
-          return res.status(403).json({ error: 'Access denied: Cross-tenant audit session access forbidden' });
-        }
+      const sessionOrgId = sessionRow.org_id || (sessionRow.scan_id ? (db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any)?.org_id : null);
+      if (!sessionOrgId || sessionOrgId !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant audit session access forbidden' });
       }
 
       const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(req.params.id) as any[];
@@ -1539,11 +1537,9 @@ export function createApiRouter(customDb?: any) {
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
       }
-      if (sessionRow.scan_id) {
-        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
-        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
-          return res.status(403).json({ error: 'Access denied: Cross-tenant audit override forbidden' });
-        }
+      const sessionOrgId = sessionRow.org_id || (sessionRow.scan_id ? (db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any)?.org_id : null);
+      if (!sessionOrgId || sessionOrgId !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant audit override forbidden' });
       }
 
       // Fetch existing result
@@ -1771,6 +1767,23 @@ export function createApiRouter(customDb?: any) {
         return res.status(400).json({ error: 'scan_id or audit_id is required to register an audit report' });
       }
 
+      if (scan_id) {
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scan_id) as any;
+        if (!scanRow || scanRow.org_id !== orgId) {
+          return res.status(403).json({ error: 'Access denied: Scan does not belong to your organization' });
+        }
+      }
+      if (audit_id) {
+        const auditRow = db.prepare('SELECT org_id, scan_id FROM audit_sessions WHERE audit_id = ?').get(audit_id) as any;
+        if (!auditRow) {
+          return res.status(404).json({ error: 'Audit session not found' });
+        }
+        const auditOrgId = auditRow.org_id || (auditRow.scan_id ? (db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(auditRow.scan_id) as any)?.org_id : null);
+        if (!auditOrgId || auditOrgId !== orgId) {
+          return res.status(403).json({ error: 'Access denied: Audit session does not belong to your organization' });
+        }
+      }
+
       let session: any = undefined;
       const targetAuditId = audit_id || (scan_id && db.prepare('SELECT audit_id FROM audit_sessions WHERE scan_id = ?').get(scan_id) as any)?.audit_id;
       
@@ -1901,7 +1914,7 @@ export function createApiRouter(customDb?: any) {
         SELECT u.* FROM file_cloud_uploads u
         JOIN files f ON u.file_id = f.file_id
         JOIN scans s ON f.scan_id = s.scan_id
-        WHERE s.org_id = ? OR s.org_id IS NULL
+        WHERE s.org_id = ?
       `).all(orgId);
       res.json(rows);
     } catch (err: any) {
@@ -1909,10 +1922,21 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  async function processFileUpload(fileId: string): Promise<any> {
-    const fileRow = db.prepare('SELECT * FROM files WHERE file_id = ?').get(fileId) as any;
+  async function processFileUpload(fileId: string, orgId?: string): Promise<any> {
+    let fileRow: any;
+    if (orgId) {
+      fileRow = db.prepare(`
+        SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
+        WHERE f.file_id = ? AND s.org_id = ?
+      `).get(fileId, orgId);
+    } else {
+      fileRow = db.prepare(`
+        SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
+        WHERE f.file_id = ?
+      `).get(fileId);
+    }
     if (!fileRow) {
-      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: 'File not found' };
+      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: 'File not found or unauthorized' };
     }
 
     const localPath = fileRow.path;
@@ -2118,13 +2142,21 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  router.post('/cloud-uploads/retry/:file_id', async (req: Request, res: Response) => {
+  router.post('/cloud-uploads/retry/:file_id', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
     try {
       const { file_id } = req.params;
+      const orgId = req.user!.orgId;
       if (!isValidFileId(file_id)) {
         return res.status(400).json({ error: 'Invalid file ID format or security violation.' });
       }
-      const result = await processFileUpload(file_id);
+      const fileRow = db.prepare(`
+        SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
+        WHERE f.file_id = ? AND s.org_id = ?
+      `).get(file_id, orgId);
+      if (!fileRow) {
+        return res.status(403).json({ error: 'Access denied: File not found or unauthorized' });
+      }
+      const result = await processFileUpload(file_id, orgId);
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });

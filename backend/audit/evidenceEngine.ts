@@ -65,11 +65,18 @@ export class EvidenceEngine {
    */
   public async runAuditScanForSession(
     scanId: string,
+    orgId?: string,
     auditDate: string = new Date().toISOString().split('T')[0],
     agencyName: string = 'Primary Telecalling & Collection Agency',
     auditorName: string = 'Automated Audit System',
     customChecklist?: AuditParameter[]
   ): Promise<AuditSession> {
+    if (orgId) {
+      const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any;
+      if (!scanRow || scanRow.org_id !== orgId) {
+        throw new Error(`Access denied: Scan ${scanId} does not belong to organization ${orgId}`);
+      }
+    }
     const auditId = `AUDIT-${crypto.randomUUID().substring(0, 8)}`;
     const activeChecklist = customChecklist || INITIAL_AUDIT_CHECKLIST;
     
@@ -248,18 +255,27 @@ export class EvidenceEngine {
     if (!this.db) return;
 
     try {
+      let orgId = (session as any).org_id || null;
+      if (!orgId && session.scan_id) {
+        const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(session.scan_id) as any;
+        if (scanRow) {
+          orgId = scanRow.org_id || null;
+        }
+      }
+
       const stmt = this.db.prepare(`
         INSERT INTO audit_sessions (
-          audit_id, scan_id, audit_date, agency_name, auditor_name, status,
+          audit_id, scan_id, org_id, audit_date, agency_name, auditor_name, status,
           total_parameters, pass_count, fail_count, review_count, not_found_count,
           fatal_failures_count, overall_score, max_score, overall_status,
           category_scores_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
         session.audit_id,
         session.scan_id || null,
+        orgId,
         session.audit_date,
         session.agency_name,
         session.auditor_name,
