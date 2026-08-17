@@ -336,11 +336,11 @@ export class WebAccessDetector {
 
   constructor(options: WebAccessDetectorOptions = {}) {
     this.targets = options.targets || DEFAULT_WEB_TARGETS;
-    this.connectionTimeoutMs = options.connectionTimeoutMs || 3000;
-    this.requestTimeoutMs = options.requestTimeoutMs || 5000;
+    this.connectionTimeoutMs = options.connectionTimeoutMs || 1200;
+    this.requestTimeoutMs = options.requestTimeoutMs || 1500;
     this.maxResponseSizeBytes = options.maxResponseSizeBytes || 65536; // 64 KB cap
     this.maxRedirects = options.maxRedirects || 3;
-    this.concurrencyLimit = options.concurrencyLimit || 5;
+    this.concurrencyLimit = options.concurrencyLimit || 8;
     this.mockProbeHandler = options.mockProbeHandler;
   }
 
@@ -419,10 +419,16 @@ export class WebAccessDetector {
       // Stage 1: DNS Resolution Check & Sinkhole Detection
       let dnsAddresses: string[] = [];
       try {
-        const lookupResult = await dns.lookup(parsedUrl.hostname, { all: true });
+        const dnsTimeout = Math.min(this.connectionTimeoutMs, 1200);
+        const lookupPromise = dns.lookup(parsedUrl.hostname, { all: true });
+        const timerPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('DNS resolution timed out')), dnsTimeout)
+        );
+        const lookupResult = await Promise.race([lookupPromise, timerPromise]);
         dnsAddresses = lookupResult.map(r => r.address);
       } catch (dnsErr: any) {
         const code = dnsErr?.code;
+        const msg = dnsErr?.message || '';
         if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
           return {
             category: target.category,
@@ -432,6 +438,19 @@ export class WebAccessDetector {
             confidence: 'HIGH',
             detectionMethod: 'DNS_TCP_PROBE',
             reason: 'Domain name resolution blocked or not found (DNS sinkhole / NXDOMAIN)',
+            responseTimeMs: Date.now() - startTime,
+            timestamp
+          };
+        }
+        if (msg.includes('timed out') || code === 'ETIMEDOUT') {
+          return {
+            category: target.category,
+            service: target.service_name,
+            target_domain: target.primary_domain,
+            status: 'UNREACHABLE',
+            confidence: 'MEDIUM',
+            detectionMethod: 'DNS_TCP_PROBE',
+            reason: 'DNS resolution timed out',
             responseTimeMs: Date.now() - startTime,
             timestamp
           };
@@ -716,6 +735,21 @@ export class WebAccessDetector {
         }
       );
 
+      req.setTimeout(this.requestTimeoutMs, () => {
+        if (settled) return;
+        settled = true;
+        req.destroy();
+        return resolve({
+          category: target.category,
+          service: target.service_name,
+          target_domain: target.primary_domain,
+          status: 'UNREACHABLE',
+          confidence: 'MEDIUM',
+          detectionMethod: 'HTTPS_PROBE',
+          reason: 'Network request timed out'
+        });
+      });
+
       req.on('timeout', () => {
         if (settled) return;
         settled = true;
@@ -728,6 +762,20 @@ export class WebAccessDetector {
           confidence: 'MEDIUM',
           detectionMethod: 'HTTPS_PROBE',
           reason: 'Network request timed out'
+        });
+      });
+
+      req.on('close', () => {
+        if (settled) return;
+        settled = true;
+        return resolve({
+          category: target.category,
+          service: target.service_name,
+          target_domain: target.primary_domain,
+          status: 'UNREACHABLE',
+          confidence: 'MEDIUM',
+          detectionMethod: 'HTTPS_PROBE',
+          reason: 'Connection closed'
         });
       });
 

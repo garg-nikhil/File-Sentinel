@@ -829,35 +829,146 @@ async function runEndpointComplianceTestSuite() {
     passedTests++;
   }
 
-  // Test 43: End-to-End API Assessment Execution
+  // Test 43: Production API Rejects mockWindowsUsbData Parameter with HTTP 400
   {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${tokenA}`)
       .send({
         deviceId: deviceA,
-        platformOverride: 'windows',
-        customWebTargets: sampleTestTargets,
         mockWindowsUsbData: {
           status: 'DISABLED',
-          confidence: 'HIGH',
-          connectedStorageDevices: [{
-            device_type: 'USB Mass Storage',
-            manufacturer: 'Kingston',
-            model: 'DataTraveler 3.0',
-            connection_status: 'Connected'
-          }],
-          connectedDeviceCount: 1
+          confidence: 'HIGH'
         }
       });
 
-    assert.strictEqual(res.status, 200);
-    assert.ok(res.body.id.startsWith('EP-ASM-'));
-    assert.strictEqual(res.body.usb_result.status, 'DISABLED');
-    assert.strictEqual(res.body.usb_result.connectedDeviceCount, 1);
-    assert.ok(res.body.web_results.length > 0);
-    assert.ok(res.body.evidence_text.length > 50);
-    console.log('  [PASS] Test 43: End-to-End API Assessment Endpoint Execution');
+    assert.strictEqual(res.status, 400, 'Production API must reject mockWindowsUsbData with HTTP 400');
+    assert.ok(res.body.error.includes('mockWindowsUsbData'), 'Error message must explicitly mention mockWindowsUsbData');
+    console.log('  [PASS] Test 43: Production API Rejects mockWindowsUsbData (HTTP 400)');
+    passedTests++;
+  }
+
+  // Test 44: Production API Rejects platformOverride Parameter with HTTP 400
+  {
+    const res = await request(app)
+      .post('/api/endpoint/assess')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        deviceId: deviceA,
+        platformOverride: 'windows'
+      });
+
+    assert.strictEqual(res.status, 400, 'Production API must reject platformOverride with HTTP 400');
+    assert.ok(res.body.error.includes('platformOverride'), 'Error message must explicitly mention platformOverride');
+    console.log('  [PASS] Test 44: Production API Rejects platformOverride (HTTP 400)');
+    passedTests++;
+  }
+
+  // Test 45: Production API Rejects customWebTargets Parameter with HTTP 400
+  {
+    const res = await request(app)
+      .post('/api/endpoint/assess')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        deviceId: deviceA,
+        customWebTargets: sampleTestTargets
+      });
+
+    assert.strictEqual(res.status, 400, 'Production API must reject customWebTargets with HTTP 400');
+    assert.ok(res.body.error.includes('customWebTargets'), 'Error message must mention customWebTargets');
+    console.log('  [PASS] Test 45: Production API Rejects customWebTargets (HTTP 400)');
+    passedTests++;
+  }
+
+  // Test 46: Fabricated DISABLED Result Cannot Become Compliance Evidence
+  {
+    const auditSessionId = `audit-${crypto.randomBytes(8).toString('hex')}`;
+    db.prepare('INSERT INTO audit_sessions (audit_id, org_id, audit_date, agency_name, auditor_name, status, overall_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(auditSessionId, orgA, '2026-08-17', 'Alpha Security', 'Auditor Alpha', 'IN_PROGRESS', 'REVIEW_REQUIRED', now, now);
+
+    const initialEvidenceCount = (db.prepare('SELECT COUNT(*) as cnt FROM audit_parameter_results WHERE audit_id = ?').get(auditSessionId) as any).cnt;
+
+    const res = await request(app)
+      .post('/api/endpoint/assess')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        deviceId: deviceA,
+        linkAuditSessionId: auditSessionId,
+        mockWindowsUsbData: {
+          status: 'DISABLED',
+          confidence: 'HIGH',
+          connectedDeviceCount: 0,
+          connectedStorageDevices: []
+        }
+      });
+
+    assert.strictEqual(res.status, 400, 'Mock injection attempt must be blocked with HTTP 400');
+    const finalEvidenceCount = (db.prepare('SELECT COUNT(*) as cnt FROM audit_parameter_results WHERE audit_id = ?').get(auditSessionId) as any).cnt;
+    assert.strictEqual(finalEvidenceCount, initialEvidenceCount, 'Fabricated DISABLED result must not generate audit evidence records');
+    console.log('  [PASS] Test 46: Fabricated DISABLED Result Rejected & Cannot Become Evidence');
+    passedTests++;
+  }
+
+  // Test 47: Fabricated ENABLED Result Cannot Become Compliance Evidence
+  {
+    const auditSessionId = `audit-${crypto.randomBytes(8).toString('hex')}`;
+    db.prepare('INSERT INTO audit_sessions (audit_id, org_id, audit_date, agency_name, auditor_name, status, overall_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(auditSessionId, orgA, '2026-08-17', 'Alpha Security', 'Auditor Alpha', 'IN_PROGRESS', 'REVIEW_REQUIRED', now, now);
+
+    const initialEvidenceCount = (db.prepare('SELECT COUNT(*) as cnt FROM audit_parameter_results WHERE audit_id = ?').get(auditSessionId) as any).cnt;
+
+    const res = await request(app)
+      .post('/api/endpoint/assess')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        deviceId: deviceA,
+        linkAuditSessionId: auditSessionId,
+        mockWindowsUsbData: {
+          status: 'ENABLED',
+          confidence: 'HIGH',
+          connectedDeviceCount: 2,
+          connectedStorageDevices: [{
+            device_type: 'USB Mass Storage',
+            manufacturer: 'SanDisk',
+            model: 'Ultra USB 3.0',
+            connection_status: 'Connected'
+          }]
+        }
+      });
+
+    assert.strictEqual(res.status, 400, 'Mock injection attempt must be blocked with HTTP 400');
+    const finalEvidenceCount = (db.prepare('SELECT COUNT(*) as cnt FROM audit_parameter_results WHERE audit_id = ?').get(auditSessionId) as any).cnt;
+    assert.strictEqual(finalEvidenceCount, initialEvidenceCount, 'Fabricated ENABLED result must not generate audit evidence records');
+    console.log('  [PASS] Test 47: Fabricated ENABLED Result Rejected & Cannot Become Evidence');
+    passedTests++;
+  }
+
+  // Test 48: Real USB Detector & End-to-End API Assessment Execution (No Mocks)
+  {
+    const res = await request(app)
+      .post('/api/endpoint/assess')
+      .set('Authorization', `Bearer ${tokenA}`)
+      .send({
+        deviceId: deviceA
+      });
+
+    assert.strictEqual(res.status, 200, 'Production API should execute real assessment successfully');
+    assert.ok(res.body.id.startsWith('EP-ASM-'), 'Assessment ID must follow EP-ASM- format');
+    assert.strictEqual(res.body.org_id, orgA);
+    assert.strictEqual(res.body.device_id, deviceA);
+    assert.strictEqual(res.body.user_id, userA);
+    assert.ok(res.body.platform, 'Platform must be detected');
+    assert.ok(res.body.usb_result, 'Real USB detector result must be present');
+    assert.ok(res.body.web_results.length > 0, 'Real web detector results must be present');
+    assert.ok(res.body.evidence_text.length > 50, 'Deterministic evidence text must be populated');
+    
+    // Stored in database
+    const dbRecord = db.prepare('SELECT * FROM endpoint_assessments WHERE id = ?').get(res.body.id) as any;
+    assert.ok(dbRecord, 'Assessment must be persisted in database');
+    assert.strictEqual(dbRecord.org_id, orgA);
+    assert.strictEqual(dbRecord.device_id, deviceA);
+
+    console.log('  [PASS] Test 48: Real USB Detector Executed & End-to-End Production Assessment Verified');
     passedTests++;
   }
 

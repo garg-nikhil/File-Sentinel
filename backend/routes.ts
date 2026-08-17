@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -2244,6 +2244,46 @@ export function createApiRouter(customDb?: any) {
   // ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A)
   // ==========================================
 
+  /**
+   * SECURITY ENFORCEMENT MIDDLEWARE: Endpoint Assessment Production Sanitizer
+   * 
+   * Strict Security Mandate:
+   * 1. Rejects any incoming payload containing mock/diagnostic parameters ('mockWindowsUsbData', 'platformOverride', 'customWebTargets') with HTTP 400.
+   * 2. Defensive In-Depth Stripping: Deletes any lingering diagnostic keys from req.body to prevent downstream leakage.
+   * 3. Enforces that only authentic, real local detection logic is executed against the host OS.
+   */
+  const enforceEndpointProductionSecurity = (req: Request, res: Response, next: NextFunction) => {
+    const userOrgId = req.user?.orgId || 'UNKNOWN_ORG';
+    const userId = req.user?.userId || 'UNKNOWN_USER';
+    const requestedDeviceId = (req.body?.deviceId as string) || req.user?.deviceId || 'UNKNOWN_DEVICE';
+
+    // List of forbidden diagnostic/mock keys
+    const forbiddenMockFields = ['mockWindowsUsbData', 'platformOverride', 'customWebTargets', 'mockData', 'mockUsbData'];
+
+    for (const field of forbiddenMockFields) {
+      if (req.body && req.body[field] !== undefined) {
+        logSecEvent('FABRICATED_DETECTION_PAYLOAD_REJECTED', 'FAILURE', userOrgId, userId, requestedDeviceId, {
+          parameter: field,
+          enforcement: 'STRICT_LOCAL_ONLY_SECURITY_POLICY'
+        });
+        return res.status(400).json({
+          error: `Invalid parameter: '${field}' is strictly forbidden in production API. Only real local detection is permitted.`
+        });
+      }
+    }
+
+    // Defensive in-depth stripping of potential proto/mock pollution
+    if (req.body && typeof req.body === 'object') {
+      delete req.body.mockWindowsUsbData;
+      delete req.body.platformOverride;
+      delete req.body.customWebTargets;
+      delete req.body.mockData;
+      delete req.body.mockUsbData;
+    }
+
+    next();
+  };
+
   // Get default web targets
   router.get('/endpoint/targets', authenticateRequest, (req: Request, res: Response) => {
     res.json(DEFAULT_WEB_TARGETS);
@@ -2254,6 +2294,7 @@ export function createApiRouter(customDb?: any) {
     '/endpoint/assess',
     authenticateRequest,
     requireRole(['SYS_ADMIN', 'ORG_ADMIN', 'AUDITOR', 'OPERATOR']),
+    enforceEndpointProductionSecurity,
     async (req: Request, res: Response) => {
       try {
         const userOrgId = req.user!.orgId;
@@ -2296,31 +2337,8 @@ export function createApiRouter(customDb?: any) {
           });
         }
 
-        // Check if test mocks or custom targets were passed in body
-        const mockWindowsUsbData = req.body.mockWindowsUsbData;
-        const platformOverride = req.body.platformOverride;
-        
-        let validatedCustomTargets: WebAccessTarget[] | undefined;
-        if (req.body.customWebTargets) {
-          if (!Array.isArray(req.body.customWebTargets)) {
-            return res.status(400).json({ error: 'customWebTargets must be an array of target definitions' });
-          }
-          // Only ORG_ADMIN or SYS_ADMIN may supply custom targets
-          if (req.user!.role !== 'ORG_ADMIN' && req.user!.role !== 'SYS_ADMIN') {
-            return res.status(403).json({ error: 'Forbidden: Custom web targets require ORG_ADMIN privileges' });
-          }
-          try {
-            validatedCustomTargets = req.body.customWebTargets.map((t: any) => validateAndSanitizeTarget(t));
-          } catch (valErr: any) {
-            return res.status(400).json({ error: `Invalid customWebTargets: ${valErr?.message}` });
-          }
-        }
-
-        const endpointEngine = new EndpointComplianceEngine(db, {
-          platformOverride,
-          mockWindowsUsbData,
-          customWebTargets: validatedCustomTargets
-        });
+        // Production API strictly executes real local detection
+        const endpointEngine = new EndpointComplianceEngine(db);
 
         const assessment = await endpointEngine.runAssessment({
           orgId: userOrgId,
@@ -2339,31 +2357,46 @@ export function createApiRouter(customDb?: any) {
         if (req.body.linkAuditSessionId) {
           const auditSessionId = req.body.linkAuditSessionId;
           const auditSession = db.prepare(`
-            SELECT id, org_id FROM audit_sessions WHERE id = ? AND org_id = ?
-          `).get(auditSessionId, userOrgId) as { id: string; org_id: string } | undefined;
+            SELECT audit_id, org_id FROM audit_sessions WHERE audit_id = ? AND org_id = ?
+          `).get(auditSessionId, userOrgId) as { audit_id: string; org_id: string } | undefined;
 
           if (auditSession) {
             const evidenceItems = EndpointEvidenceGenerator.toAuditEvidenceItems(assessment);
             for (const ev of evidenceItems) {
-              db.prepare(`
-                INSERT INTO audit_evidence_items (
-                  id, session_id, file_id, filename, domain, confidence, is_valid, evidence_type, semantic_intent, text_preview, validation_reason, mandatory_fields_json, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              `).run(
-                `ev-item-${crypto.randomUUID()}`,
-                auditSessionId,
-                ev.file_id,
-                ev.filename,
-                ev.domain,
-                ev.confidence,
-                ev.is_valid ? 1 : 0,
-                ev.evidence_type,
-                ev.semantic_intent,
-                ev.text_preview,
-                ev.validation_reason,
-                JSON.stringify(ev.mandatory_fields_present || []),
-                assessment.timestamp
-              );
+              const paramId = ev.evidence_type === 'DLP_GPO_CONFIGURATION_EXPORT' ? 'ZTI-008' : 'ZTI-009';
+              const existingParam = db.prepare(`
+                SELECT * FROM audit_parameter_results WHERE audit_id = ? AND parameter_id = ?
+              `).get(auditSessionId, paramId) as any;
+
+              if (existingParam) {
+                let existingEv = [];
+                try {
+                  existingEv = JSON.parse(existingParam.evidence_json || '[]');
+                } catch {}
+                existingEv.push(ev);
+                db.prepare(`
+                  UPDATE audit_parameter_results
+                  SET evidence_json = ?, status = ?
+                  WHERE audit_id = ? AND parameter_id = ?
+                `).run(JSON.stringify(existingEv), ev.is_valid ? 'PASS' : 'FAIL', auditSessionId, paramId);
+              } else {
+                db.prepare(`
+                  INSERT INTO audit_parameter_results (
+                    audit_id, parameter_id, status, confidence, fatal,
+                    score_earned, max_score, evidence_json, reason
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                `).run(
+                  auditSessionId,
+                  paramId,
+                  ev.is_valid ? 'PASS' : 'FAIL',
+                  1.0,
+                  0,
+                  ev.is_valid ? 10 : 0,
+                  10,
+                  JSON.stringify([ev]),
+                  ev.validation_reason
+                );
+              }
             }
           }
         }
