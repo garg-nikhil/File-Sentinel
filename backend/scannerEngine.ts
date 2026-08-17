@@ -556,10 +556,11 @@ export class FileScannerEngine {
         session.current_file = 'Evaluating compliance...';
         const { EvidenceEngine } = await import('./audit/evidenceEngine.js');
         const evidenceEngine = new EvidenceEngine(this.db);
-        const effectiveOrgId = orgId || (this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any)?.org_id;
-        if (effectiveOrgId) {
-          await evidenceEngine.runAuditScanForSession({ scanId, orgId: effectiveOrgId });
-        }
+        const resolvedOrgId = orgId || (this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any)?.org_id || 'default_org';
+        await evidenceEngine.runAuditScanForSession({
+          scanId,
+          orgId: resolvedOrgId
+        });
       } catch(err) {
         console.error(`[Scan Engine] Audit evaluation failed for scan ${scanId}:`, err);
       } finally {

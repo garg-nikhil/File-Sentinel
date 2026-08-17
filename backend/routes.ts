@@ -21,6 +21,9 @@ import { PrivacyGovernanceService } from './privacyGovernance.js';
 import { VerifiableAuditReportService } from './audit/verifiableReportService.js';
 import { createAdminRouter } from './admin/adminRoutes.js';
 import { PilotService } from './pilotService.js';
+import { EndpointComplianceEngine } from './endpoint/endpointDetector.js';
+import { DEFAULT_WEB_TARGETS } from './endpoint/webAccessDetector.js';
+import { EndpointEvidenceGenerator } from './endpoint/endpointEvidence.js';
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -1419,10 +1422,9 @@ export function createApiRouter(customDb?: any) {
       const orgId = req.user!.orgId;
       const rows = db.prepare(`
         SELECT a.* FROM audit_sessions a
-        LEFT JOIN scans s ON a.scan_id = s.scan_id
-        WHERE a.org_id = ? OR s.org_id = ?
+        WHERE a.org_id = ?
         ORDER BY a.created_at DESC LIMIT 50
-      `).all(orgId, orgId) as any[];
+      `).all(orgId) as any[];
       const sessions = rows.map(r => ({
         ...r,
         category_scores: r.category_scores_json ? JSON.parse(r.category_scores_json) : {}
@@ -1441,9 +1443,14 @@ export function createApiRouter(customDb?: any) {
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
       }
-      const sessionOrgId = sessionRow.org_id || (sessionRow.scan_id ? (db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any)?.org_id : null);
-      if (!sessionOrgId || sessionOrgId !== orgId) {
+      if (!sessionRow.org_id || sessionRow.org_id !== orgId) {
         return res.status(403).json({ error: 'Access denied: Cross-tenant audit session access forbidden' });
+      }
+      if (sessionRow.scan_id) {
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
+        if (scanRow && scanRow.org_id && scanRow.org_id !== sessionRow.org_id) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant audit scan access forbidden' });
+        }
       }
 
       const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(req.params.id) as any[];
@@ -1538,9 +1545,14 @@ export function createApiRouter(customDb?: any) {
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
       }
-      const sessionOrgId = sessionRow.org_id || (sessionRow.scan_id ? (db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any)?.org_id : null);
-      if (!sessionOrgId || sessionOrgId !== orgId) {
+      if (!sessionRow.org_id || sessionRow.org_id !== orgId) {
         return res.status(403).json({ error: 'Access denied: Cross-tenant audit override forbidden' });
+      }
+      if (sessionRow.scan_id) {
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
+        if (scanRow && scanRow.org_id && scanRow.org_id !== sessionRow.org_id) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant audit scan override forbidden' });
+        }
       }
 
       // Fetch existing result
@@ -1637,12 +1649,13 @@ export function createApiRouter(customDb?: any) {
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
       }
-
-      // Check tenant isolation if scan is associated with an org
+      if (!sessionRow.org_id || sessionRow.org_id !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant audit access forbidden' });
+      }
       if (sessionRow.scan_id) {
         const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
-        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
-          return res.status(403).json({ error: 'Access denied: Cross-tenant audit access forbidden' });
+        if (scanRow && scanRow.org_id && scanRow.org_id !== sessionRow.org_id) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant audit scan access forbidden' });
         }
       }
 
@@ -1686,11 +1699,13 @@ export function createApiRouter(customDb?: any) {
       if (!sessionRow) {
         return res.status(404).json({ error: 'Audit session not found' });
       }
-
+      if (!sessionRow.org_id || sessionRow.org_id !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Cross-tenant audit report export forbidden' });
+      }
       if (sessionRow.scan_id) {
         const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(sessionRow.scan_id) as any;
-        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
-          return res.status(403).json({ error: 'Access denied: Cross-tenant audit report export forbidden' });
+        if (scanRow && scanRow.org_id && scanRow.org_id !== sessionRow.org_id) {
+          return res.status(403).json({ error: 'Access denied: Cross-tenant audit report scan export forbidden' });
         }
       }
 
@@ -1764,32 +1779,68 @@ export function createApiRouter(customDb?: any) {
       const orgId = req.user!.orgId;
       const { scan_id, audit_id, engine_version, checklist_version, canonical_report, report_hash, custom_report_hash } = req.body;
 
-      if (!scan_id && !audit_id && !canonical_report?.scan_id) {
+      // Extract all candidate scan and audit identifiers
+      const bodyScanId = typeof scan_id === 'string' && scan_id.trim() ? scan_id.trim() : undefined;
+      const bodyAuditId = typeof audit_id === 'string' && audit_id.trim() ? audit_id.trim() : undefined;
+      const canonicalScanId = typeof canonical_report?.scan_id === 'string' && canonical_report.scan_id.trim() ? canonical_report.scan_id.trim() : undefined;
+      const canonicalAuditId = typeof canonical_report?.audit_id === 'string' && canonical_report.audit_id.trim() ? canonical_report.audit_id.trim() : undefined;
+      const canonicalOrgId = typeof canonical_report?.organization_id === 'string' && canonical_report.organization_id.trim() ? canonical_report.organization_id.trim() : undefined;
+
+      // Check organization identity in canonical_report
+      if (canonicalOrgId && canonicalOrgId !== orgId) {
+        return res.status(403).json({ error: 'Access denied: Organization ID mismatch in canonical report' });
+      }
+
+      // Check consistency between top-level and canonical_report parameters
+      if (bodyScanId && canonicalScanId && bodyScanId !== canonicalScanId) {
+        return res.status(403).json({ error: 'Access denied: Inconsistent scan identities provided' });
+      }
+      if (bodyAuditId && canonicalAuditId && bodyAuditId !== canonicalAuditId) {
+        return res.status(403).json({ error: 'Access denied: Inconsistent audit identities provided' });
+      }
+
+      const candidateScanId = bodyScanId || canonicalScanId;
+      const candidateAuditId = bodyAuditId || canonicalAuditId;
+
+      if (!candidateScanId && !candidateAuditId) {
         return res.status(400).json({ error: 'scan_id or audit_id is required to register an audit report' });
       }
 
-      if (scan_id) {
-        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scan_id) as any;
+      // Validate candidate scan tenant ownership
+      if (candidateScanId) {
+        const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(candidateScanId) as any;
         if (!scanRow || scanRow.org_id !== orgId) {
           return res.status(403).json({ error: 'Access denied: Scan does not belong to your organization' });
         }
       }
-      if (audit_id) {
-        const auditRow = db.prepare('SELECT org_id, scan_id FROM audit_sessions WHERE audit_id = ?').get(audit_id) as any;
+
+      // Validate candidate audit session tenant ownership
+      if (candidateAuditId) {
+        const auditRow = db.prepare('SELECT org_id, scan_id FROM audit_sessions WHERE audit_id = ?').get(candidateAuditId) as any;
         if (!auditRow) {
           return res.status(404).json({ error: 'Audit session not found' });
         }
-        const auditOrgId = auditRow.org_id || (auditRow.scan_id ? (db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(auditRow.scan_id) as any)?.org_id : null);
-        if (!auditOrgId || auditOrgId !== orgId) {
+        if (!auditRow.org_id || auditRow.org_id !== orgId) {
           return res.status(403).json({ error: 'Access denied: Audit session does not belong to your organization' });
+        }
+        if (auditRow.scan_id) {
+          const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(auditRow.scan_id) as any;
+          if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
+            return res.status(403).json({ error: 'Access denied: Scan associated with audit session belongs to another organization' });
+          }
+          if (candidateScanId && auditRow.scan_id !== candidateScanId) {
+            return res.status(403).json({ error: 'Access denied: Inconsistent scan and audit session associations' });
+          }
         }
       }
 
+      // Resolve ONE authoritative scan identity and audit identity
+      const authoritativeScanId = candidateScanId || (candidateAuditId && (db.prepare('SELECT scan_id FROM audit_sessions WHERE audit_id = ?').get(candidateAuditId) as any)?.scan_id) || `FS-SCAN-${candidateAuditId}`;
+      const targetAuditId = candidateAuditId || (candidateScanId && (db.prepare('SELECT audit_id FROM audit_sessions WHERE scan_id = ?').get(candidateScanId) as any)?.audit_id);
+
       let session: any = undefined;
-      const targetAuditId = audit_id || (scan_id && db.prepare('SELECT audit_id FROM audit_sessions WHERE scan_id = ?').get(scan_id) as any)?.audit_id;
-      
       if (targetAuditId) {
-        const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ?').get(targetAuditId) as any;
+        const sessionRow = db.prepare('SELECT * FROM audit_sessions WHERE audit_id = ? AND org_id = ?').get(targetAuditId, orgId) as any;
         if (sessionRow) {
           const paramRows = db.prepare('SELECT * FROM audit_parameter_results WHERE audit_id = ?').all(targetAuditId) as any[];
           const activeChecklistMap = new Map(INITIAL_AUDIT_CHECKLIST.map(p => [p.id, p]));
@@ -1813,11 +1864,15 @@ export function createApiRouter(customDb?: any) {
       }
 
       const result = verifiableReportService.registerReport({
-        scan_id: scan_id || session?.scan_id || `FS-SCAN-${targetAuditId || 'GENERAL'}`,
+        scan_id: authoritativeScanId,
         organization_id: orgId,
         engine_version,
         checklist_version,
-        canonical_report,
+        canonical_report: canonical_report ? {
+          ...canonical_report,
+          scan_id: authoritativeScanId,
+          organization_id: orgId
+        } : undefined,
         session,
         custom_report_hash: custom_report_hash || report_hash
       });
@@ -2179,6 +2234,176 @@ export function createApiRouter(customDb?: any) {
         deviceId: req.user?.deviceId
       });
       res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ==========================================
+  // ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A)
+  // ==========================================
+
+  // Get default web targets
+  router.get('/endpoint/targets', authenticateRequest, (req: Request, res: Response) => {
+    res.json(DEFAULT_WEB_TARGETS);
+  });
+
+  // Run full endpoint compliance assessment
+  router.post(
+    '/endpoint/assess',
+    authenticateRequest,
+    requireRole(['SYS_ADMIN', 'ORG_ADMIN', 'AUDITOR', 'OPERATOR']),
+    async (req: Request, res: Response) => {
+      try {
+        const userOrgId = req.user!.orgId;
+        const userId = req.user!.userId;
+        const requestedDeviceId = (req.body.deviceId as string) || req.user!.deviceId;
+
+        if (!requestedDeviceId) {
+          return res.status(400).json({
+            error: 'DEVICE_IDENTITY_UNAVAILABLE: No trusted device identifier provided or associated with session.'
+          });
+        }
+
+        // Validate device exists and belongs to this organization
+        const deviceRow = db.prepare(`
+          SELECT device_id, org_id, revoked FROM devices WHERE device_id = ?
+        `).get(requestedDeviceId) as { device_id: string; org_id: string; revoked: number } | undefined;
+
+        if (!deviceRow) {
+          logSecEvent('ENDPOINT_ASSESSMENT_DENIED', 'FAILURE', userOrgId, userId, requestedDeviceId, {
+            reason: 'DEVICE_NOT_FOUND'
+          });
+          return res.status(403).json({
+            error: `Forbidden: Device '${requestedDeviceId}' is not registered.`
+          });
+        }
+
+        if (deviceRow.org_id !== userOrgId) {
+          logSecEvent('CROSS_TENANT_ENDPOINT_ATTEMPT', 'FAILURE', userOrgId, userId, requestedDeviceId, {
+            targetOrg: deviceRow.org_id
+          });
+          return res.status(403).json({
+            error: 'Forbidden: Device belongs to a different organization.'
+          });
+        }
+
+        if (deviceRow.revoked === 1) {
+          logSecEvent('REVOKED_DEVICE_ASSESSMENT_ATTEMPT', 'FAILURE', userOrgId, userId, requestedDeviceId);
+          return res.status(403).json({
+            error: 'Forbidden: Device registration is revoked.'
+          });
+        }
+
+        // Check if test mocks were passed in body (for automated testing / CI)
+        const mockWindowsUsbData = req.body.mockWindowsUsbData;
+        const platformOverride = req.body.platformOverride;
+        const customWebTargets = req.body.customWebTargets;
+
+        const endpointEngine = new EndpointComplianceEngine(db, {
+          platformOverride,
+          mockWindowsUsbData,
+          customWebTargets
+        });
+
+        const assessment = await endpointEngine.runAssessment({
+          orgId: userOrgId,
+          userId,
+          deviceId: requestedDeviceId
+        });
+
+        // Audit & telemetry recording
+        logSecEvent('ENDPOINT_ASSESSMENT_COMPLETED', 'SUCCESS', userOrgId, userId, requestedDeviceId, {
+          assessmentId: assessment.id,
+          overallStatus: assessment.overall_status,
+          usbStatus: assessment.usb_result.status
+        });
+
+        // Optionally link to an active audit session if requested
+        if (req.body.linkAuditSessionId) {
+          const auditSessionId = req.body.linkAuditSessionId;
+          const auditSession = db.prepare(`
+            SELECT id, org_id FROM audit_sessions WHERE id = ? AND org_id = ?
+          `).get(auditSessionId, userOrgId) as { id: string; org_id: string } | undefined;
+
+          if (auditSession) {
+            const evidenceItems = EndpointEvidenceGenerator.toAuditEvidenceItems(assessment);
+            for (const ev of evidenceItems) {
+              db.prepare(`
+                INSERT INTO audit_evidence_items (
+                  id, session_id, file_id, filename, domain, confidence, is_valid, evidence_type, semantic_intent, text_preview, validation_reason, mandatory_fields_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `).run(
+                `ev-item-${crypto.randomUUID()}`,
+                auditSessionId,
+                ev.file_id,
+                ev.filename,
+                ev.domain,
+                ev.confidence,
+                ev.is_valid ? 1 : 0,
+                ev.evidence_type,
+                ev.semantic_intent,
+                ev.text_preview,
+                ev.validation_reason,
+                JSON.stringify(ev.mandatory_fields_present || []),
+                assessment.timestamp
+              );
+            }
+          }
+        }
+
+        res.json(assessment);
+      } catch (err: any) {
+        console.error('[EndpointAssessError]', err);
+        res.status(500).json({ error: err.message || 'Failed to complete endpoint compliance assessment' });
+      }
+    }
+  );
+
+  // List assessments for current organization
+  router.get('/endpoint/assessments', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const limit = Math.min(parseInt(req.query.limit as string) || 20, 100);
+      const engine = new EndpointComplianceEngine(db);
+      const list = engine.listAssessments(orgId, limit);
+      res.json(list);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get specific assessment by ID (tenant-scoped)
+  router.get('/endpoint/assessment/:id', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { id } = req.params;
+      const engine = new EndpointComplianceEngine(db);
+      const assessment = engine.getAssessmentById(id, orgId);
+
+      if (!assessment) {
+        return res.status(404).json({ error: 'Assessment not found or access denied' });
+      }
+
+      res.json(assessment);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get latest assessment for organization
+  router.get('/endpoint/latest', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const deviceId = req.query.deviceId as string | undefined;
+      const engine = new EndpointComplianceEngine(db);
+      const latest = engine.getLatestAssessment(orgId, deviceId);
+
+      if (!latest) {
+        return res.status(404).json({ error: 'No endpoint compliance assessments found' });
+      }
+
+      res.json(latest);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

@@ -5,6 +5,7 @@ import { hashPassword } from '../backend/auth.js';
 import { createApiRouter } from '../backend/routes.js';
 import { BillingService } from '../backend/billing.js';
 import { LicensingEngine } from '../backend/licensing.js';
+import { VerifiableAuditReportService } from '../backend/audit/verifiableReportService.js';
 import assert from 'node:assert';
 import express from 'express';
 import request from 'supertest';
@@ -102,6 +103,32 @@ async function runTenantIsolationTestSuite() {
     INSERT INTO audit_sessions (audit_id, scan_id, org_id, audit_date, agency_name, auditor_name, status, overall_score, overall_status, created_at, updated_at)
     VALUES (?, NULL, ?, '2026-08-16', 'Orphan Agency', 'Auditor', 'COMPLETED', 80, 'PASS', ?, ?)
   `).run(orphanAuditIdA, orgA, now, now);
+
+  // Register real report for Tenant A
+  const verifiableReportService = new VerifiableAuditReportService(db);
+  const realReportA = verifiableReportService.registerReport({
+    scan_id: scanIdA,
+    organization_id: orgA,
+    session: {
+      audit_id: auditIdA,
+      scan_id: scanIdA,
+      org_id: orgA,
+      audit_date: '2026-08-16',
+      agency_name: 'Alpha Agency',
+      auditor_name: 'Auditor A',
+      status: 'COMPLETED',
+      overall_score: 75,
+      max_score: 100,
+      overall_status: 'CONDITIONAL',
+      total_parameters: 1,
+      pass_count: 0,
+      fail_count: 1,
+      review_count: 0,
+      fatal_failures_count: 0,
+      parameter_results: []
+    } as any
+  });
+  const reportIdA = realReportA.report_id;
 
   const licensingEngine = new LicensingEngine(db);
   const billingService = new BillingService(db, licensingEngine);
@@ -213,10 +240,64 @@ async function runTenantIsolationTestSuite() {
   assert.strictEqual(t17.status, 403);
   console.log('✔ Test 17: Tenant B cannot register report using Tenant A audit_id');
 
-  // 18. Tenant B cannot access Tenant A report download
-  const t18 = await request(app).get('/api/reports/FS-RPT-FAKE/download').set('Authorization', `Bearer ${tokenB}`);
-  assert.strictEqual(t18.status, 404);
-  console.log('✔ Test 18: Tenant B cannot access Tenant A report');
+  // 18. Tenant B cannot download Tenant A real report
+  const t18 = await request(app).get(`/api/reports/${reportIdA}/download`).set('Authorization', `Bearer ${tokenB}`);
+  assert.ok([403, 404].includes(t18.status));
+  console.log('✔ Test 18: Tenant B cannot download Tenant A real report');
+
+  // 18b. Tenant B cannot revoke Tenant A real report
+  const t18b = await request(app).post(`/api/reports/revoke/${reportIdA}`).set('Authorization', `Bearer ${tokenB}`).send({ reason: 'Malicious revocation' });
+  assert.ok([400, 403, 404].includes(t18b.status));
+  console.log('✔ Test 18b: Tenant B cannot revoke Tenant A real report');
+
+  // 18c. Tenant B cannot inject Tenant A scan_id through canonical_report
+  const t18c = await request(app).post('/api/reports/register').set('Authorization', `Bearer ${tokenB}`).send({
+    canonical_report: {
+      scan_id: scanIdA,
+      overall_score: 95
+    }
+  });
+  assert.strictEqual(t18c.status, 403);
+  console.log('✔ Test 18c: Tenant B cannot inject Tenant A scan_id through canonical_report');
+
+  // 18d. Tenant B cannot inject Tenant A audit_id through canonical_report
+  const t18d = await request(app).post('/api/reports/register').set('Authorization', `Bearer ${tokenB}`).send({
+    canonical_report: {
+      audit_id: auditIdA,
+      overall_score: 95
+    }
+  });
+  assert.strictEqual(t18d.status, 403);
+  console.log('✔ Test 18d: Tenant B cannot inject Tenant A audit_id through canonical_report');
+
+  // 18e. Tenant B cannot obtain Tenant A audit session if audit_sessions.org_id != scans.org_id
+  const scanIdB = 'SCAN-BETA-001';
+  db.prepare(`
+    INSERT INTO scans (scan_id, root_path, start_time, status, total_files, org_id, user_id, device_id)
+    VALUES (?, '/secret/beta/path', ?, 'COMPLETED', 1, ?, ?, ?)
+  `).run(scanIdB, now, orgB, userB, deviceB);
+
+  const mismatchedAuditId = 'AUDIT-MISMATCH-1';
+  db.prepare(`
+    INSERT INTO audit_sessions (audit_id, scan_id, org_id, audit_date, agency_name, auditor_name, status, overall_score, overall_status, created_at, updated_at)
+    VALUES (?, ?, ?, '2026-08-16', 'Alpha Agency', 'Auditor A', 'COMPLETED', 75, 'CONDITIONAL', ?, ?)
+  `).run(mismatchedAuditId, scanIdB, orgA, now, now);
+
+  const t18eList = await request(app).get('/api/audit/sessions').set('Authorization', `Bearer ${tokenB}`);
+  assert.strictEqual(t18eList.status, 200);
+  assert.strictEqual(t18eList.body.some((s: any) => s.audit_id === mismatchedAuditId), false);
+
+  const t18eGet = await request(app).get(`/api/audit/session/${mismatchedAuditId}`).set('Authorization', `Bearer ${tokenB}`);
+  assert.strictEqual(t18eGet.status, 403);
+
+  const t18eOverride = await request(app).post('/api/audit/override').set('Authorization', `Bearer ${tokenB}`).send({
+    audit_id: mismatchedAuditId,
+    parameter_id: 'ZTI-001',
+    new_status: 'PASS',
+    auditor_name: 'Attacker'
+  });
+  assert.strictEqual(t18eOverride.status, 403);
+  console.log('✔ Test 18e: Tenant B cannot obtain Tenant A audit session when audit_sessions.org_id != scans.org_id');
 
   // 19. Tenant B cannot access Tenant A audit logs
   const t19 = await request(app).get('/api/audit-logs').set('Authorization', `Bearer ${tokenB}`);
@@ -227,7 +308,7 @@ async function runTenantIsolationTestSuite() {
   // 20. Tenant B cannot access Tenant A dashboard statistics (sees Beta stats)
   const t20 = await request(app).get('/api/dashboard/stats').set('Authorization', `Bearer ${tokenB}`);
   assert.strictEqual(t20.status, 200);
-  assert.strictEqual(t20.body.totalScans, 0);
+  assert.strictEqual(t20.body.totalScans, 1);
   console.log('✔ Test 20: Tenant B cannot access Tenant A dashboard statistics');
 
   // 21. Tenant A dashboard statistics exclude Tenant B

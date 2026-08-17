@@ -16,6 +16,15 @@ import {
   EvidenceItem
 } from './models.js';
 
+export interface RunAuditScanForSessionOptions {
+  scanId: string;
+  orgId: string;
+  auditDate?: string;
+  agencyName?: string;
+  auditorName?: string;
+  customChecklist?: AuditParameter[];
+}
+
 export class EvidenceEngine {
   private db: any;
   private matcher: EvidenceMatcher;
@@ -36,7 +45,8 @@ export class EvidenceEngine {
     agencyName: string = 'Primary Telecalling & Collection Agency',
     auditorName: string = 'Automated Audit System',
     customChecklist?: AuditParameter[],
-    aiPrivacyMode: 'OFF' | 'REDACTED_SNIPPETS' | 'FULL_TEXT' = 'OFF'
+    aiPrivacyMode: 'OFF' | 'REDACTED_SNIPPETS' | 'FULL_TEXT' = 'OFF',
+    orgId?: string
   ): Promise<AuditSession> {
     const auditId = `AUDIT-${crypto.randomUUID().substring(0, 8)}`;
     const activeChecklist = customChecklist || INITIAL_AUDIT_CHECKLIST;
@@ -57,60 +67,38 @@ export class EvidenceEngine {
       }
     }
 
-    return this.evaluateChecklist(auditId, fileExtractions, activeChecklist, auditDate, agencyName, auditorName, undefined, aiPrivacyMode);
+    return this.evaluateChecklist(auditId, fileExtractions, activeChecklist, auditDate, agencyName, auditorName, undefined, aiPrivacyMode, orgId);
   }
 
   /**
    * Runs an Audit Scan over existing scan session data (already extracted evidence)
    */
-  public async runAuditScanForSession(
-    optionsOrScanId: string | {
-      scanId: string;
-      orgId?: string;
-      auditDate?: string;
-      agencyName?: string;
-      auditorName?: string;
-      customChecklist?: AuditParameter[];
-    },
-    orgIdParam?: string,
-    auditDateParam: string = new Date().toISOString().split('T')[0],
-    agencyNameParam: string = 'Primary Telecalling & Collection Agency',
-    auditorNameParam: string = 'Automated Audit System',
-    customChecklistParam?: AuditParameter[]
-  ): Promise<AuditSession> {
-    let scanId: string;
-    let orgId: string | undefined;
-    let auditDate: string;
-    let agencyName: string;
-    let auditorName: string;
-    let customChecklist: AuditParameter[] | undefined;
+  public async runAuditScanForSession(options: RunAuditScanForSessionOptions): Promise<AuditSession> {
+    const {
+      scanId,
+      orgId,
+      auditDate = new Date().toISOString().split('T')[0],
+      agencyName = 'Primary Telecalling & Collection Agency',
+      auditorName = 'Automated Audit System',
+      customChecklist
+    } = options;
 
-    if (typeof optionsOrScanId === 'object' && optionsOrScanId !== null) {
-      scanId = optionsOrScanId.scanId;
-      orgId = optionsOrScanId.orgId;
-      auditDate = optionsOrScanId.auditDate || new Date().toISOString().split('T')[0];
-      agencyName = optionsOrScanId.agencyName || 'Primary Telecalling & Collection Agency';
-      auditorName = optionsOrScanId.auditorName || 'Automated Audit System';
-      customChecklist = optionsOrScanId.customChecklist;
-    } else {
-      scanId = optionsOrScanId as string;
-      orgId = orgIdParam;
-      auditDate = auditDateParam;
-      agencyName = agencyNameParam;
-      auditorName = auditorNameParam;
-      customChecklist = customChecklistParam;
+    if (!scanId || typeof scanId !== 'string') {
+      throw new Error('Scan ID is required for audit scan');
+    }
+    if (!orgId || typeof orgId !== 'string') {
+      throw new Error('Organization ID is mandatory for audit scan');
     }
 
-    if (orgId) {
-      const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any;
-      if (!scanRow || scanRow.org_id !== orgId) {
-        throw new Error(`Access denied: Cross-tenant audit scan forbidden`);
-      }
+    const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any;
+    if (!scanRow || scanRow.org_id !== orgId) {
+      throw new Error('Access denied: Cross-tenant audit scan forbidden');
     }
+
     const auditId = `AUDIT-${crypto.randomUUID().substring(0, 8)}`;
     const activeChecklist = customChecklist || INITIAL_AUDIT_CHECKLIST;
     
-    console.log(`[Audit Engine] Starting Audit ${auditId} for Scan Session ${scanId}`);
+    console.log(`[Audit Engine] Starting Audit ${auditId} for Scan Session ${scanId} (Org: ${orgId})`);
 
     const rows = this.db.prepare('SELECT file_id, path, extracted_text, metadata_json FROM files WHERE scan_id = ?').all(scanId) as any[];
     
@@ -134,7 +122,7 @@ export class EvidenceEngine {
       });
     }
     
-    return this.evaluateChecklist(auditId, fileExtractions, activeChecklist, auditDate, agencyName, auditorName, scanId);
+    return this.evaluateChecklist(auditId, fileExtractions, activeChecklist, auditDate, agencyName, auditorName, scanId, 'OFF', orgId);
   }
 
   private async evaluateChecklist(
@@ -145,7 +133,8 @@ export class EvidenceEngine {
     agencyName: string,
     auditorName: string,
     scanId?: string,
-    aiPrivacyMode: 'OFF' | 'REDACTED_SNIPPETS' | 'FULL_TEXT' = 'OFF'
+    aiPrivacyMode: 'OFF' | 'REDACTED_SNIPPETS' | 'FULL_TEXT' = 'OFF',
+    orgId?: string
   ): Promise<AuditSession> {
     // Evaluate each parameter against all documents
     const parameterResults: AuditParameterResult[] = [];
@@ -224,6 +213,9 @@ export class EvidenceEngine {
     if (scanId) {
       session.scan_id = scanId;
     }
+    if (orgId) {
+      (session as any).org_id = orgId;
+    }
 
     // Perform True Session-Level Entity Resolution across all validated evidence
     const entityResolution = EntityResolver.resolveAuditSessionEntities(parameterResults, auditId);
@@ -286,10 +278,15 @@ export class EvidenceEngine {
 
     try {
       let orgId = (session as any).org_id || null;
-      if (!orgId && session.scan_id) {
+      if (session.scan_id) {
         const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(session.scan_id) as any;
-        if (scanRow) {
-          orgId = scanRow.org_id || null;
+        if (scanRow && scanRow.org_id) {
+          if (orgId && scanRow.org_id !== orgId) {
+            throw new Error(`Tenant mismatch: audit_sessions.org_id (${orgId}) does not match scans.org_id (${scanRow.org_id})`);
+          }
+          if (!orgId) {
+            orgId = scanRow.org_id;
+          }
         }
       }
 

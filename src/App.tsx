@@ -12,6 +12,7 @@ import { SettingsView } from './components/SettingsView';
 import { LicenseView } from './components/LicenseView';
 import { AuditComplianceView } from './components/audit/AuditComplianceView';
 import { VendorCloudDashboardView } from './components/VendorCloudDashboardView';
+import { EndpointComplianceView } from './components/EndpointComplianceView';
 import { ReportVerificationView } from './components/ReportVerificationView';
 import { AdminConsoleView } from './components/AdminConsoleView';
 import { api } from './services/api';
@@ -115,6 +116,10 @@ export default function App() {
 
             {activeTab === 'cloud_dashboard' && (
               <VendorCloudDashboardView />
+            )}
+
+            {activeTab === 'endpoint_compliance' && (
+              <EndpointComplianceView />
             )}
 
             {activeTab === 'audit' && (

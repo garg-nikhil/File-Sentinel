@@ -466,6 +466,34 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         details_json TEXT,
         timestamp TEXT NOT NULL
       );
+
+      CREATE TABLE IF NOT EXISTS endpoint_assessments (
+        id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        timestamp TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        application_version TEXT NOT NULL,
+        overall_status TEXT NOT NULL,
+        summary_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id),
+        FOREIGN KEY (device_id) REFERENCES devices(device_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS endpoint_detection_results (
+        id TEXT PRIMARY KEY,
+        assessment_id TEXT NOT NULL,
+        category TEXT NOT NULL,
+        target TEXT NOT NULL,
+        status TEXT NOT NULL,
+        confidence TEXT NOT NULL,
+        detection_method TEXT NOT NULL,
+        metadata_json TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (assessment_id) REFERENCES endpoint_assessments(id)
+      );
     `);
 
     // Database schema migrations for existing databases

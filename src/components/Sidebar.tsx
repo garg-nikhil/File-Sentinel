@@ -14,7 +14,8 @@ import {
   KeyRound,
   Cloud,
   Fingerprint,
-  ShieldCheck
+  ShieldCheck,
+  Laptop
 } from 'lucide-react';
 import { api } from '../services/api';
 import { LicenseInfo } from '../types';
@@ -22,6 +23,7 @@ import { LicenseInfo } from '../types';
 export type NavTab =
   | 'dashboard'
   | 'cloud_dashboard'
+  | 'endpoint_compliance'
   | 'audit'
   | 'verify_report'
   | 'scan'
@@ -50,6 +52,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isSca
   const menuItems: { id: NavTab; label: string; icon: React.ReactNode }[] = [
     { id: 'dashboard', label: 'Local DLP Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: 'cloud_dashboard', label: 'Vendor Cloud Dashboard', icon: <Cloud className="w-4 h-4 text-emerald-400" /> },
+    { id: 'endpoint_compliance', label: 'Endpoint Compliance', icon: <Laptop className="w-4 h-4 text-cyan-400" /> },
     { id: 'audit', label: 'Audit Compliance', icon: <FileCheck className="w-4 h-4" /> },
     { id: 'verify_report', label: 'Report Verification', icon: <Fingerprint className="w-4 h-4 text-indigo-400" /> },
     { id: 'scan', label: 'Scanner', icon: <FolderSearch className="w-4 h-4" /> },

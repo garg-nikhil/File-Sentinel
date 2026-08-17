@@ -497,5 +497,52 @@ export const api = {
       body: JSON.stringify({ reason })
     });
     return res.json();
+  },
+
+  // --- ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A) ---
+  async runEndpointAssessment(payload?: {
+    deviceId?: string;
+    linkAuditSessionId?: string;
+    mockWindowsUsbData?: any;
+    platformOverride?: string;
+    customWebTargets?: any;
+  }): Promise<import('../types').EndpointAssessment> {
+    const res = await fetch('/api/endpoint/assess', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload || {})
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: 'Assessment failed' }));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    return res.json();
+  },
+
+  async getEndpointAssessments(limit: number = 20): Promise<import('../types').EndpointAssessment[]> {
+    const res = await fetch(`/api/endpoint/assessments?limit=${limit}`);
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  async getEndpointAssessmentById(id: string): Promise<import('../types').EndpointAssessment> {
+    const res = await fetch(`/api/endpoint/assessment/${encodeURIComponent(id)}`);
+    if (!res.ok) {
+      throw new Error(`Assessment ${id} not found`);
+    }
+    return res.json();
+  },
+
+  async getLatestEndpointAssessment(deviceId?: string): Promise<import('../types').EndpointAssessment | null> {
+    const query = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : '';
+    const res = await fetch(`/api/endpoint/latest${query}`);
+    if (!res.ok) return null;
+    return res.json();
+  },
+
+  async getEndpointTargets(): Promise<import('../types').WebAccessTarget[]> {
+    const res = await fetch('/api/endpoint/targets');
+    if (!res.ok) return [];
+    return res.json();
   }
 };

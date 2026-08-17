@@ -167,16 +167,16 @@ export type EvidenceRole =
   | 'IRRELEVANT_REJECTED';
 
 export interface EvidenceItem {
-  evidence_id: string;
+  evidence_id?: string;
   file_id: string;
   filename: string;
-  path: string;
+  path?: string;
   evidence_type: string;
-  relevance: number; // 0.0 - 1.0
-  extracted_fields: Record<string, any>;
-  snippet: string;
+  relevance?: number; // 0.0 - 1.0
+  extracted_fields?: Record<string, any>;
+  snippet?: string;
   page?: number;
-  created_at: string;
+  created_at?: string;
   source_type?: EvidenceSourceType;
   sourceType?: EvidenceSourceType;
   control_id?: string;
@@ -184,6 +184,7 @@ export interface EvidenceItem {
   controlDomain?: EvidenceDomain;
   document_domain?: EvidenceDomain;
   documentDomain?: EvidenceDomain;
+  domain?: EvidenceDomain | string;
   domain_match?: boolean;
   domainMatch?: boolean;
   structured_fields?: Record<string, any>;
@@ -210,6 +211,14 @@ export interface EvidenceItem {
   isFilenameOnly?: boolean;
   isContentOnly?: boolean;
   validated?: boolean;
+  is_valid?: boolean;
+  isValid?: boolean;
+  semantic_intent?: string;
+  semanticIntent?: string;
+  text_preview?: string;
+  textPreview?: string;
+  mandatory_fields_present?: string[];
+  mandatoryFieldsPresent?: string[];
   satisfiesControl?: boolean;
   confidence?: number;
   classification?: 'VALIDATED' | 'PARTIALLY_VALIDATED' | 'REVIEW' | 'CONTRADICTORY' | 'NOT_RELEVANT';
