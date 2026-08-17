@@ -64,17 +64,47 @@ export class EvidenceEngine {
    * Runs an Audit Scan over existing scan session data (already extracted evidence)
    */
   public async runAuditScanForSession(
-    scanId: string,
-    orgId?: string,
-    auditDate: string = new Date().toISOString().split('T')[0],
-    agencyName: string = 'Primary Telecalling & Collection Agency',
-    auditorName: string = 'Automated Audit System',
-    customChecklist?: AuditParameter[]
+    optionsOrScanId: string | {
+      scanId: string;
+      orgId?: string;
+      auditDate?: string;
+      agencyName?: string;
+      auditorName?: string;
+      customChecklist?: AuditParameter[];
+    },
+    orgIdParam?: string,
+    auditDateParam: string = new Date().toISOString().split('T')[0],
+    agencyNameParam: string = 'Primary Telecalling & Collection Agency',
+    auditorNameParam: string = 'Automated Audit System',
+    customChecklistParam?: AuditParameter[]
   ): Promise<AuditSession> {
+    let scanId: string;
+    let orgId: string | undefined;
+    let auditDate: string;
+    let agencyName: string;
+    let auditorName: string;
+    let customChecklist: AuditParameter[] | undefined;
+
+    if (typeof optionsOrScanId === 'object' && optionsOrScanId !== null) {
+      scanId = optionsOrScanId.scanId;
+      orgId = optionsOrScanId.orgId;
+      auditDate = optionsOrScanId.auditDate || new Date().toISOString().split('T')[0];
+      agencyName = optionsOrScanId.agencyName || 'Primary Telecalling & Collection Agency';
+      auditorName = optionsOrScanId.auditorName || 'Automated Audit System';
+      customChecklist = optionsOrScanId.customChecklist;
+    } else {
+      scanId = optionsOrScanId as string;
+      orgId = orgIdParam;
+      auditDate = auditDateParam;
+      agencyName = agencyNameParam;
+      auditorName = auditorNameParam;
+      customChecklist = customChecklistParam;
+    }
+
     if (orgId) {
       const scanRow = this.db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scanId) as any;
       if (!scanRow || scanRow.org_id !== orgId) {
-        throw new Error(`Access denied: Scan ${scanId} does not belong to organization ${orgId}`);
+        throw new Error(`Access denied: Cross-tenant audit scan forbidden`);
       }
     }
     const auditId = `AUDIT-${crypto.randomUUID().substring(0, 8)}`;

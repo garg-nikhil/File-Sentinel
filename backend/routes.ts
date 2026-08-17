@@ -1033,7 +1033,7 @@ export function createApiRouter(customDb?: any) {
       return res.json(active);
     }
 
-    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND (org_id = ? OR org_id IS NULL)').get(id, orgId) as any;
+    const row = db.prepare('SELECT * FROM scans WHERE scan_id = ? AND org_id = ?').get(id, orgId) as any;
     if (!row) return res.status(404).json({ error: 'Scan session not found or unauthorized' });
     res.json(row);
   });
@@ -1042,7 +1042,7 @@ export function createApiRouter(customDb?: any) {
   router.get('/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
     const { scan_id, classification, severity } = req.query;
-    let query = 'SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL)';
+    let query = 'SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ?';
     const params: any[] = [orgId];
     const conditions: string[] = [];
 
@@ -1100,7 +1100,7 @@ export function createApiRouter(customDb?: any) {
     const row = db.prepare(`
       SELECT f.* FROM files f
       JOIN scans s ON f.scan_id = s.scan_id
-      WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+      WHERE f.file_id = ? AND s.org_id = ?
     `).get(id, orgId) as any;
     if (!row) return res.status(404).json({ error: 'File not found or unauthorized' });
 
@@ -1126,7 +1126,7 @@ export function createApiRouter(customDb?: any) {
     const fileRow = db.prepare(`
       SELECT f.* FROM files f
       JOIN scans s ON f.scan_id = s.scan_id
-      WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+      WHERE f.file_id = ? AND s.org_id = ?
     `).get(id, orgId) as any;
     if (!fileRow) return res.status(404).json({ error: 'File not found or unauthorized' });
 
@@ -1158,7 +1158,7 @@ export function createApiRouter(customDb?: any) {
       FROM findings f
       JOIN files fi ON f.file_id = fi.file_id
       JOIN scans s ON fi.scan_id = s.scan_id
-      WHERE s.org_id = ? OR s.org_id IS NULL
+      WHERE s.org_id = ?
       ORDER BY 
         CASE f.severity
           WHEN 'CRITICAL' THEN 1
@@ -1224,7 +1224,7 @@ export function createApiRouter(customDb?: any) {
       SELECT q.* FROM quarantine_items q
       JOIN files f ON q.file_id = f.file_id
       JOIN scans s ON f.scan_id = s.scan_id
-      WHERE s.org_id = ? OR s.org_id IS NULL
+      WHERE s.org_id = ?
       ORDER BY q.quarantined_at DESC
     `).all(orgId) as any[];
     const items = rows.map(r => ({
@@ -1240,7 +1240,7 @@ export function createApiRouter(customDb?: any) {
     const fileRow = db.prepare(`
       SELECT f.* FROM files f
       JOIN scans s ON f.scan_id = s.scan_id
-      WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+      WHERE f.file_id = ? AND s.org_id = ?
     `).get(file_id, orgId) as any;
     if (!fileRow) return res.status(404).json({ error: 'File not found or unauthorized' });
 
@@ -1279,43 +1279,43 @@ export function createApiRouter(customDb?: any) {
   // --- DASHBOARD STATS ---
   router.get('/dashboard/stats', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
-    const totalScans = (db.prepare('SELECT COUNT(*) as c FROM scans WHERE org_id = ? OR org_id IS NULL').get(orgId) as any).c;
+    const totalScans = (db.prepare('SELECT COUNT(*) as c FROM scans WHERE org_id = ?').get(orgId) as any).c;
     const totalFilesScanned = (db.prepare(`
-      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? OR s.org_id IS NULL
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ?
     `).get(orgId) as any).c;
 
     const critical = (db.prepare(`
-      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score >= 80
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? AND f.risk_score >= 80
     `).get(orgId) as any).c;
     const high = (db.prepare(`
-      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score >= 50 AND f.risk_score < 80
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? AND f.risk_score >= 50 AND f.risk_score < 80
     `).get(orgId) as any).c;
     const medium = (db.prepare(`
-      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score >= 20 AND f.risk_score < 50
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? AND f.risk_score >= 20 AND f.risk_score < 50
     `).get(orgId) as any).c;
     const low = (db.prepare(`
-      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score > 0 AND f.risk_score < 20
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? AND f.risk_score > 0 AND f.risk_score < 20
     `).get(orgId) as any).c;
     const safe = (db.prepare(`
-      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL) AND f.risk_score = 0
+      SELECT COUNT(*) as c FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? AND f.risk_score = 0
     `).get(orgId) as any).c;
 
-    const recentScans = db.prepare('SELECT * FROM scans WHERE org_id = ? OR org_id IS NULL ORDER BY start_time DESC LIMIT 5').all(orgId);
+    const recentScans = db.prepare('SELECT * FROM scans WHERE org_id = ? ORDER BY start_time DESC LIMIT 5').all(orgId);
     const highestRiskFiles = db.prepare(`
-      SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? OR s.org_id IS NULL ORDER BY f.risk_score DESC LIMIT 5
+      SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ? ORDER BY f.risk_score DESC LIMIT 5
     `).all(orgId);
     const recentFindings = db.prepare(`
       SELECT f.*, fi.filename FROM findings f
       JOIN files fi ON f.file_id = fi.file_id
       JOIN scans s ON fi.scan_id = s.scan_id
-      WHERE s.org_id = ? OR s.org_id IS NULL
+      WHERE s.org_id = ?
       ORDER BY f.created_at DESC LIMIT 6
     `).all(orgId);
     const quarantinedCount = (db.prepare(`
       SELECT COUNT(*) as c FROM quarantine_items q
       JOIN files fi ON q.file_id = fi.file_id
       JOIN scans s ON fi.scan_id = s.scan_id
-      WHERE s.org_id = ? OR s.org_id IS NULL
+      WHERE s.org_id = ?
     `).get(orgId) as any).c;
 
     res.json({
@@ -1332,7 +1332,7 @@ export function createApiRouter(customDb?: any) {
   // AUDIT LOGS
   router.get('/audit-logs', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR']), (req: Request, res: Response) => {
     const orgId = req.user!.orgId;
-    const rows = db.prepare('SELECT * FROM security_audit_events WHERE org_id = ? OR org_id IS NULL ORDER BY timestamp DESC LIMIT 100').all(orgId);
+    const rows = db.prepare('SELECT * FROM security_audit_events WHERE org_id = ? ORDER BY timestamp DESC LIMIT 100').all(orgId);
     res.json(rows);
   });
 
@@ -1361,12 +1361,13 @@ export function createApiRouter(customDb?: any) {
       let session;
       
       if (scan_id) {
-        session = await evidenceEngine.runAuditScanForSession(
-          scan_id,
-          audit_date || new Date().toISOString().split('T')[0],
-          agency_name || 'Primary Telecalling & Collection Agency',
-          auditor_name || 'Automated Compliance Inspector'
-        );
+        session = await evidenceEngine.runAuditScanForSession({
+          scanId: scan_id,
+          orgId,
+          auditDate: audit_date || new Date().toISOString().split('T')[0],
+          agencyName: agency_name || 'Primary Telecalling & Collection Agency',
+          auditorName: auditor_name || 'Automated Compliance Inspector'
+        });
         logAuditEvent('RUN_AUDIT_COMPLIANCE', scan_id, undefined, 'SUCCESS', `Audit ID: ${session.audit_id}, Score: ${session.overall_score}`);
       } else {
         const roots = scan_roots || (target_dir ? [target_dir] : []);
@@ -1419,9 +1420,9 @@ export function createApiRouter(customDb?: any) {
       const rows = db.prepare(`
         SELECT a.* FROM audit_sessions a
         LEFT JOIN scans s ON a.scan_id = s.scan_id
-        WHERE s.org_id = ? OR s.org_id IS NULL OR a.scan_id IS NULL
+        WHERE a.org_id = ? OR s.org_id = ?
         ORDER BY a.created_at DESC LIMIT 50
-      `).all(orgId) as any[];
+      `).all(orgId, orgId) as any[];
       const sessions = rows.map(r => ({
         ...r,
         category_scores: r.category_scores_json ? JSON.parse(r.category_scores_json) : {}
@@ -1922,19 +1923,24 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
-  async function processFileUpload(fileId: string, orgId?: string): Promise<any> {
-    let fileRow: any;
-    if (orgId) {
-      fileRow = db.prepare(`
-        SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
-        WHERE f.file_id = ? AND s.org_id = ?
-      `).get(fileId, orgId);
-    } else {
-      fileRow = db.prepare(`
-        SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
-        WHERE f.file_id = ?
-      `).get(fileId);
+  interface ProcessFileUploadOptions {
+    fileId: string;
+    orgId: string;
+    userId?: string;
+    deviceId?: string;
+  }
+
+  async function processFileUpload(options: ProcessFileUploadOptions): Promise<any> {
+    const { fileId, orgId } = options;
+    if (!fileId || !orgId) {
+      return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: 'File ID and Organization ID are required' };
     }
+
+    const fileRow = db.prepare(`
+      SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
+      WHERE f.file_id = ? AND s.org_id = ?
+    `).get(fileId, orgId) as any;
+
     if (!fileRow) {
       return { file_id: fileId, success: false, status: 'UPLOAD_FAILED', error: 'File not found or unauthorized' };
     }
@@ -2056,7 +2062,7 @@ export function createApiRouter(customDb?: any) {
         }
         const fileRow = db.prepare(`
           SELECT f.* FROM files f JOIN scans s ON f.scan_id = s.scan_id
-          WHERE f.file_id = ? AND (s.org_id = ? OR s.org_id IS NULL)
+          WHERE f.file_id = ? AND s.org_id = ?
         `).get(fileId, orgId);
         if (!fileRow) {
           return res.status(403).json({ error: `Access denied: File not found or unauthorized: ${fileId}` });
@@ -2065,7 +2071,12 @@ export function createApiRouter(customDb?: any) {
 
       const results: any[] = [];
       for (const fileId of file_ids) {
-        const resItem = await processFileUpload(fileId);
+        const resItem = await processFileUpload({
+          fileId,
+          orgId,
+          userId: req.user?.userId,
+          deviceId: req.user?.deviceId
+        });
         results.push(resItem);
       }
 
@@ -2101,14 +2112,14 @@ export function createApiRouter(customDb?: any) {
       }
 
       const { scan_id } = req.body;
-      let query = 'SELECT f.file_id FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE (s.org_id = ? OR s.org_id IS NULL)';
+      let query = 'SELECT f.file_id FROM files f JOIN scans s ON f.scan_id = s.scan_id WHERE s.org_id = ?';
       const params: any[] = [orgId];
       if (scan_id) {
         if (typeof scan_id !== 'string' || scan_id.length > 64) {
           return res.status(400).json({ error: 'Invalid scan_id parameter' });
         }
         const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(scan_id) as any;
-        if (scanRow && scanRow.org_id && scanRow.org_id !== orgId) {
+        if (!scanRow || scanRow.org_id !== orgId) {
           return res.status(403).json({ error: 'Access denied: Cross-tenant scan upload forbidden' });
         }
         query += ' AND f.scan_id = ?';
@@ -2123,7 +2134,12 @@ export function createApiRouter(customDb?: any) {
 
       const results: any[] = [];
       for (const fileId of fileIds) {
-        const resItem = await processFileUpload(fileId);
+        const resItem = await processFileUpload({
+          fileId,
+          orgId,
+          userId: req.user?.userId,
+          deviceId: req.user?.deviceId
+        });
         results.push(resItem);
       }
 
@@ -2156,7 +2172,12 @@ export function createApiRouter(customDb?: any) {
       if (!fileRow) {
         return res.status(403).json({ error: 'Access denied: File not found or unauthorized' });
       }
-      const result = await processFileUpload(file_id, orgId);
+      const result = await processFileUpload({
+        fileId: file_id,
+        orgId,
+        userId: req.user?.userId,
+        deviceId: req.user?.deviceId
+      });
       res.json(result);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
