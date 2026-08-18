@@ -376,7 +376,9 @@ export async function runEntityResolutionTestSuite() {
   console.log('====================================================');
 }
 
-runEntityResolutionTestSuite().catch(err => {
+runEntityResolutionTestSuite().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('\n❌ Test Suite Failed:\n', err);
   process.exit(1);
 });

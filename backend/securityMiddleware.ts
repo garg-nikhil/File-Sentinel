@@ -5,11 +5,11 @@ import helmet from 'helmet';
 export const securityHeaders = helmet({
   contentSecurityPolicy: {
     directives: {
-      defaultSrc: ["'self'"],
+      defaultSrc: ["'none'"],
+      connectSrc: ["'self'", "ws://localhost:3000", "ws://127.0.0.1:3000", "http://localhost:3000", "http://127.0.0.1:3000", "ws:", "wss:"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
-      imgSrc: ["'self'", "data:", "blob:"],
-      connectSrc: ["'self'", "ws:", "wss:"]
+      imgSrc: ["'self'", "data:", "blob:"]
     }
   },
   crossOriginOpenerPolicy: { policy: 'same-origin' },
@@ -33,7 +33,7 @@ export function corsMiddleware(req: Request, res: Response, next: NextFunction) 
     }
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-FS-IPC-Secret, X-CSRF-Token, X-Requested-With');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') {

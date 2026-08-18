@@ -15,6 +15,8 @@ export interface ProtectedLicenseState {
   expiresAtIso: string;
   clockRollbackDetected: boolean;
   updatedAtIso: string;
+  maxSeenVersion?: string;
+  maxSeenIssuedAtIso?: string;
 }
 
 export class ProtectedLicenseStore {

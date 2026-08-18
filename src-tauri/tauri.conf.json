@@ -13,16 +13,22 @@
     "allowlist": {
       "all": false,
       "fs": {
-        "all": true,
-        "scope": ["$APP/*", "$DESKTOP/*", "$DOCUMENT/*", "$DOWNLOAD/*"]
+        "all": false,
+        "readFile": true,
+        "writeFile": false,
+        "readDir": false,
+        "scope": ["$APP/*"]
       },
       "dialog": {
-        "all": true,
+        "all": false,
         "open": true,
         "save": true
       },
       "path": {
-        "all": true
+        "all": false,
+        "appDir": true,
+        "desktopDir": true,
+        "documentDir": true
       },
       "shell": {
         "all": false,
@@ -60,7 +66,7 @@
       }
     },
     "security": {
-      "csp": "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:3000 ws://localhost:3000; img-src 'self' data: blob:"
+      "csp": "default-src 'none'; connect-src 'self' http://localhost:3000 http://127.0.0.1:3000 ws://localhost:3000 ws://127.0.0.1:3000; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     },
     "updater": {
       "active": false

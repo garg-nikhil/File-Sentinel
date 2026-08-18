@@ -313,7 +313,9 @@ Applied to OU: Workstations_Production`;
   console.log('================================================================\n');
 }
 
-runDomainIsolationTests().catch(err => {
+runDomainIsolationTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Test Suite Failed:', err);
   process.exit(1);
 });

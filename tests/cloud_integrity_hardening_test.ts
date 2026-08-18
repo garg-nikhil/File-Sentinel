@@ -115,7 +115,9 @@ async function runCloudIntegrityHardeningTests() {
   }
 }
 
-runCloudIntegrityHardeningTests().catch(err => {
+runCloudIntegrityHardeningTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Cloud Integrity Hardening Test Suite Failed:', err);
   process.exit(1);
 });

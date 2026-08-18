@@ -118,7 +118,9 @@ async function runRemediationVerificationSuite() {
   console.log('====================================================');
 }
 
-runRemediationVerificationSuite().catch(err => {
+runRemediationVerificationSuite().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('\n❌ Remediation Verification Suite Failed:', err);
   process.exit(1);
 });

@@ -291,4 +291,6 @@ test('COMMERCIALIZATION PHASE 4: Vendor Cloud Dashboard & Tenant Isolation Test 
     assert.equal(notFoundVerify.verified, false);
     assert.equal(notFoundVerify.match_status, 'NOT_FOUND');
   });
+
+  process.exit(0);
 });

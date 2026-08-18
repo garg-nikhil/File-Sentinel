@@ -232,6 +232,7 @@ async function runPhase2LicensingTests() {
   console.log('\n================================================================');
   console.log('   ALL PHASE 2 LICENSING TESTS PASSED PERFECTLY (11/11)!        ');
   console.log('================================================================\n');
+  process.exit(0);
 }
 
 runPhase2LicensingTests().catch(err => {

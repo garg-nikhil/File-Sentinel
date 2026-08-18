@@ -1,5 +1,6 @@
 import os from 'node:os';
 import crypto from 'node:crypto';
+import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 export interface DeviceTelemetry {
@@ -165,8 +166,14 @@ export class TelemetryService {
       if (debugFilenamesOptIn) {
         try {
           const fileRows = this.db.prepare('SELECT filename FROM files WHERE scan_id = ? LIMIT 50').all(scanId) as any[];
-          // Only store sanitized base filenames (no directories, no full paths)
-          debugFilenames = fileRows.map(r => String(r.filename || 'unknown_file'));
+          // Mask filenames, folders, path details, and local absolute paths for cloud privacy:
+          debugFilenames = fileRows.map(r => {
+            const rawName = String(r.filename || 'unknown_file');
+            const baseName = path.basename(rawName);
+            const ext = path.extname(baseName);
+            const hashedBase = crypto.createHash('sha1').update(baseName).digest('hex').substring(0, 12);
+            return `file_${hashedBase}${ext}`;
+          });
         } catch {}
       }
 

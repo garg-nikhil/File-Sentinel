@@ -371,8 +371,8 @@ export class AuditReportGenerator {
 <body>
   <div class="header-bar">
     <div>
-      <h1 class="brand-title">FILESENTINEL EXECUTIVE COMPLIANCE REPORT</h1>
-      <div class="brand-subtitle">SOC 2 • ISO 27001 • GDPR • HIPAA Regulatory Compliance Audit</div>
+      <h1 class="brand-title">FILESENTINEL AUDIT COMPLIANCE REPORT</h1>
+      <div class="brand-subtitle">Executive Compliance Summary • SOC 2 • ISO 27001 • GDPR • HIPAA</div>
     </div>
     <div>
       <span class="badge ${session.overall_status === 'FATAL_FAILURE' ? 'badge-fatal' : session.overall_status === 'COMPLIANT' ? 'badge-pass' : 'badge-review'}">

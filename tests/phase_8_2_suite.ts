@@ -319,7 +319,9 @@ async function runAllPhase82Tests() {
   console.log('====================================================');
 }
 
-runAllPhase82Tests().catch(err => {
+runAllPhase82Tests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Phase 8.2 Test Suite Failed:', err);
   process.exit(1);
 });

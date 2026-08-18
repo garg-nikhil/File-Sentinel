@@ -445,6 +445,7 @@ async function runCommercialHardeningSuite() {
   console.log('\n========================================================================');
   console.log(`  ALL ${passedTests}/${totalTests} HARDENING TESTS PASSED (100% SUCCESS)`);
   console.log('========================================================================\n');
+  process.exit(0);
 }
 
 runCommercialHardeningSuite().catch(err => {

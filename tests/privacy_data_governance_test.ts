@@ -269,7 +269,9 @@ async function runPrivacyGovernanceTestSuite() {
   console.log('========================================================================\n');
 }
 
-runPrivacyGovernanceTestSuite().catch(err => {
+runPrivacyGovernanceTestSuite().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Phase 8 Test Suite Failed:', err);
   process.exit(1);
 });

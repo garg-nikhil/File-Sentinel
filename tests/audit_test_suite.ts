@@ -147,7 +147,9 @@ async function runAuditTests() {
   console.log('====================================================');
 }
 
-runAuditTests().catch(err => {
+runAuditTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('\n❌ Audit Test Suite Failed:', err);
   process.exit(1);
 });

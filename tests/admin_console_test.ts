@@ -13,6 +13,7 @@ describe('COMMERCIALIZATION PHASE 10: FileSentinel Internal Admin Console Test S
   let sysAdminToken: string;
   let orgAdminToken: string;
   let testOrgId: string;
+  let orgUsername: string;
 
   before(async () => {
     db = getDatabase();
@@ -37,7 +38,7 @@ describe('COMMERCIALIZATION PHASE 10: FileSentinel Internal Admin Console Test S
 
     // Create ORG_ADMIN user (should be forbidden from admin API)
     const orgUserId = 'user-orgadmin-' + crypto.randomUUID().substring(0, 6);
-    const orgUsername = 'orgadmin_' + crypto.randomUUID().substring(0, 6);
+    orgUsername = 'orgadmin_' + crypto.randomUUID().substring(0, 6);
     const orgHash = hashPassword('OrgAdmin123!');
     db.prepare('INSERT INTO users (user_id, org_id, username, password_hash, role, disabled, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)').run(
       orgUserId, testOrgId, orgUsername, orgHash, 'ORG_ADMIN', now
@@ -96,7 +97,7 @@ describe('COMMERCIALIZATION PHASE 10: FileSentinel Internal Admin Console Test S
     assert.strictEqual(usersRes.status, 200);
     assert.ok(usersRes.body.length > 0);
 
-    const targetUser = usersRes.body.find((u: any) => u.username === 'testorgadmin');
+    const targetUser = usersRes.body.find((u: any) => u.username === orgUsername);
     assert.ok(targetUser);
 
     const resetRes = await request(app)
@@ -143,5 +144,9 @@ describe('COMMERCIALIZATION PHASE 10: FileSentinel Internal Admin Console Test S
       .set('Authorization', `Bearer ${sysAdminToken}`);
     assert.strictEqual(systemRes.status, 200);
     assert.strictEqual(systemRes.body.current_application_version, '8.3.0');
+  });
+
+  after(() => {
+    process.exit(0);
   });
 });

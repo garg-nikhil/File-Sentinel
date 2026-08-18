@@ -974,7 +974,9 @@ async function runEndpointComplianceTestSuite() {
   console.log('========================================================================\n');
 }
 
-runEndpointComplianceTestSuite().catch((err) => {
+runEndpointComplianceTestSuite().then(() => {
+  process.exit(0);
+}).catch((err) => {
   console.error('\n❌ Test Suite Failed:', err);
   process.exit(1);
 });

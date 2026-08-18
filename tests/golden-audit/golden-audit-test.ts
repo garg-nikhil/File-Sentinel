@@ -293,7 +293,9 @@ async function runGoldenAuditTestSuite() {
   console.log('================================================================\n');
 }
 
-runGoldenAuditTestSuite().catch(err => {
+runGoldenAuditTestSuite().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Golden Audit Test Suite Failed:', err);
   process.exit(1);
 });

@@ -267,6 +267,7 @@ async function runMultiTenantSecurityTests() {
   console.log('\n========================================================================');
   console.log('ALL COMMERCIAL PHASE 7 SECURITY TESTS PASSED COMPREHENSIVELY!');
   console.log('========================================================================\n');
+  process.exit(0);
 }
 
 runMultiTenantSecurityTests().catch((err) => {

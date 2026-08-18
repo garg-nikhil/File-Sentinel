@@ -30,6 +30,8 @@ import { ChecklistManager } from './checklists/checklistManager.js';
 import { OfflineLicenseEngine, getOrCreateDevKeyPair } from './licensing/offlineLicense.js';
 import { StandardWindowsAgentBoundary } from './endpoint/agentBoundary.js';
 import { ScanSchedulerService } from './scanScheduler.js';
+import { ClockMonitorService } from './licensing/clockMonitor.js';
+import { ProtectedLicenseStore } from './licensing/protectedLicenseStore.js';
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -101,6 +103,13 @@ export function createApiRouter(customDb?: any) {
 
   // Start background recurring scan scheduler
   scanSchedulerService.startSchedulerLoop(() => currentSettings, updatedSettings => { currentSettings = updatedSettings; });
+
+  // Start background clock drift/rollback monitoring service
+  const clockMonitorService = new ClockMonitorService(db);
+  clockMonitorService.start((reason) => {
+    logSecEvent('CLOCK_ROLLBACK_DETECTED', 'FAILURE', undefined, undefined, undefined, { reason });
+    logAuditEvent('CLOCK_ROLLBACK_DETECTED', undefined, undefined, 'ERROR', `Background clock monitor flagged manual time shift or drift: ${reason}`);
+  });
 
   // Helper for audit logging
   function logAuditEvent(action: string, filePath?: string, sha256?: string, status: 'SUCCESS' | 'WARNING' | 'ERROR' = 'SUCCESS', details?: string) {
@@ -2275,15 +2284,30 @@ export function createApiRouter(customDb?: any) {
         }
       }
 
+      // Start transaction for atomic updates
+      db.exec('BEGIN TRANSACTION');
+
       const results: any[] = [];
-      for (const fileId of file_ids) {
-        const resItem = await processFileUpload({
-          fileId,
-          orgId,
-          userId: req.user?.userId,
-          deviceId: req.user?.deviceId
+      try {
+        for (const fileId of file_ids) {
+          const resItem = await processFileUpload({
+            fileId,
+            orgId,
+            userId: req.user?.userId,
+            deviceId: req.user?.deviceId
+          });
+          if (!resItem.success && resItem.status !== 'ALREADY_UPLOADED') {
+            throw new Error(`Batch upload halted due to failure on file ${fileId}: ${resItem.error || 'Unknown error'}`);
+          }
+          results.push(resItem);
+        }
+        db.exec('COMMIT');
+      } catch (innerErr: any) {
+        db.exec('ROLLBACK');
+        return res.status(500).json({
+          success: false,
+          error: `Batch transaction rolled back: ${innerErr.message}`
         });
-        results.push(resItem);
       }
 
       const successCount = results.filter(r => r.success || r.status === 'ALREADY_UPLOADED').length;
@@ -2338,15 +2362,30 @@ export function createApiRouter(customDb?: any) {
         return res.status(400).json({ error: 'Upload-all batch limit exceeded (max 5000 files).' });
       }
 
+      // Start transaction for atomic updates
+      db.exec('BEGIN TRANSACTION');
+
       const results: any[] = [];
-      for (const fileId of fileIds) {
-        const resItem = await processFileUpload({
-          fileId,
-          orgId,
-          userId: req.user?.userId,
-          deviceId: req.user?.deviceId
+      try {
+        for (const fileId of fileIds) {
+          const resItem = await processFileUpload({
+            fileId,
+            orgId,
+            userId: req.user?.userId,
+            deviceId: req.user?.deviceId
+          });
+          if (!resItem.success && resItem.status !== 'ALREADY_UPLOADED') {
+            throw new Error(`Batch upload-all halted due to failure on file ${fileId}: ${resItem.error || 'Unknown error'}`);
+          }
+          results.push(resItem);
+        }
+        db.exec('COMMIT');
+      } catch (innerErr: any) {
+        db.exec('ROLLBACK');
+        return res.status(500).json({
+          success: false,
+          error: `Batch transaction rolled back: ${innerErr.message}`
         });
-        results.push(resItem);
       }
 
       const successCount = results.filter(r => r.success || r.status === 'ALREADY_UPLOADED').length;
@@ -2412,7 +2451,31 @@ export function createApiRouter(customDb?: any) {
     const userId = req.user?.userId || 'UNKNOWN_USER';
     const sessionDeviceId = req.user?.deviceId || 'UNKNOWN_DEVICE';
 
-    // 1. Explicitly reject deviceId & client-supplied provenance in request body
+    // 1. List of forbidden diagnostic/mock keys (check first)
+    const forbiddenMockFields = [
+      'mockWindowsUsbData',
+      'platformOverride',
+      'customWebTargets',
+      'mockData',
+      'mockUsbData',
+      'mockEndpointId',
+      'mockAssessmentId',
+      'mockProvenance'
+    ];
+
+    for (const field of forbiddenMockFields) {
+      if (req.body && req.body[field] !== undefined) {
+        logSecEvent('FABRICATED_DETECTION_PAYLOAD_REJECTED', 'FAILURE', userOrgId, userId, sessionDeviceId, {
+          parameter: field,
+          enforcement: 'STRICT_LOCAL_ONLY_SECURITY_POLICY'
+        });
+        return res.status(400).json({
+          error: `Invalid parameter: '${field}' is strictly forbidden in production API. Only real local detection is permitted.`
+        });
+      }
+    }
+
+    // 2. Explicitly reject deviceId & client-supplied provenance in request body
     const forbiddenClientIdentityFields = [
       'deviceId',
       'endpointId',
@@ -2441,30 +2504,6 @@ export function createApiRouter(customDb?: any) {
         });
         return res.status(400).json({
           error: `Invalid parameter: '${field}' must not be supplied in request body. Endpoint identity and provenance are strictly generated server-side.`
-        });
-      }
-    }
-
-    // 2. List of forbidden diagnostic/mock keys
-    const forbiddenMockFields = [
-      'mockWindowsUsbData',
-      'platformOverride',
-      'customWebTargets',
-      'mockData',
-      'mockUsbData',
-      'mockEndpointId',
-      'mockAssessmentId',
-      'mockProvenance'
-    ];
-
-    for (const field of forbiddenMockFields) {
-      if (req.body && req.body[field] !== undefined) {
-        logSecEvent('FABRICATED_DETECTION_PAYLOAD_REJECTED', 'FAILURE', userOrgId, userId, sessionDeviceId, {
-          parameter: field,
-          enforcement: 'STRICT_LOCAL_ONLY_SECURITY_POLICY'
-        });
-        return res.status(400).json({
-          error: `Invalid parameter: '${field}' is strictly forbidden in production API. Only real local detection is permitted.`
         });
       }
     }
@@ -2766,19 +2805,26 @@ export function createApiRouter(customDb?: any) {
 
       // Check license validity before starting new scan
       const licEngine = new OfflineLicenseEngine(db);
-      const devKey = getOrCreateDevKeyPair();
-      const leasePayload = {
-        licenseId: 'LIC-OFFLINE-001',
-        organizationId: orgId,
-        deviceLimit: 100,
-        modules: ['SCAN', 'AUDIT', 'OCR'],
-        issuedAt: new Date().toISOString(),
-        notBefore: new Date(Date.now() - 3600000).toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
-        licenseVersion: '8.2.0'
-      };
-      const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
-      const licValidation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+      const isProduction = process.env.NODE_ENV === 'production';
+      let licValidation;
+
+      if (isProduction) {
+        licValidation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
+      } else {
+        const devKey = getOrCreateDevKeyPair();
+        const leasePayload = {
+          licenseId: 'LIC-OFFLINE-001',
+          organizationId: orgId,
+          deviceLimit: 100,
+          modules: ['SCAN', 'AUDIT', 'OCR'],
+          issuedAt: new Date().toISOString(),
+          notBefore: new Date(Date.now() - 3600000).toISOString(),
+          expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+          licenseVersion: '8.2.0'
+        };
+        const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
+        licValidation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+      }
 
       if (!licValidation.canScan) {
         return res.status(403).json({ error: 'Scanning blocked due to license expiration', licenseStatus: licValidation.status });
@@ -2882,23 +2928,223 @@ export function createApiRouter(customDb?: any) {
     try {
       const orgId = req.user!.orgId;
       const licEngine = new OfflineLicenseEngine(db);
-      const devKey = getOrCreateDevKeyPair();
+      const isProduction = process.env.NODE_ENV === 'production';
+      let validation;
 
-      const leasePayload = {
-        licenseId: 'LIC-OFFLINE-001',
-        organizationId: orgId,
-        deviceLimit: 100,
-        modules: ['SCAN', 'AUDIT', 'OCR'],
-        issuedAt: new Date().toISOString(),
-        notBefore: new Date(Date.now() - 3600000).toISOString(),
-        expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
-        licenseVersion: '8.2.0'
-      };
-
-      const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
-      const validation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+      if (isProduction) {
+        validation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
+      } else {
+        const devKey = getOrCreateDevKeyPair();
+        const leasePayload = {
+          licenseId: 'LIC-OFFLINE-001',
+          organizationId: orgId,
+          deviceLimit: 100,
+          modules: ['SCAN', 'AUDIT', 'OCR'],
+          issuedAt: new Date().toISOString(),
+          notBefore: new Date(Date.now() - 3600000).toISOString(),
+          expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+          licenseVersion: '8.2.0'
+        };
+        const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
+        validation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+      }
 
       res.json(validation);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Offline License Revalidate Endpoint
+  router.post('/license/revalidate', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const deviceId = req.user!.deviceId;
+      const licEngine = new OfflineLicenseEngine(db);
+      
+      const dbRow = db.prepare(
+        'SELECT last_trusted_timestamp FROM license_state WHERE org_id = ? ORDER BY last_trusted_timestamp DESC LIMIT 1'
+      ).get(orgId) as { last_trusted_timestamp: string } | undefined;
+
+      const nowMs = Date.now();
+      let clockIsHealthy = true;
+      let checkDetails = '';
+
+      if (dbRow && dbRow.last_trusted_timestamp) {
+        const dbMaxMs = new Date(dbRow.last_trusted_timestamp).getTime();
+        if (!isNaN(dbMaxMs) && nowMs < (dbMaxMs - 3600 * 1000)) {
+          clockIsHealthy = false;
+          checkDetails = `System clock is still rolled back. System time: ${new Date().toISOString()}, Last trusted time: ${dbRow.last_trusted_timestamp}`;
+        }
+      }
+
+      if (clockIsHealthy) {
+        const nowIso = new Date().toISOString();
+        
+        // 1. Reset in SQLite
+        db.prepare(
+          "UPDATE license_state SET clock_rollback_detected = 0, status = 'ACTIVE', updated_at = ? WHERE org_id = ?"
+        ).run(nowIso, orgId);
+
+        // 2. Reset in Protected Store
+        try {
+          const store = new ProtectedLicenseStore();
+          const state = store.loadState();
+          if (state) {
+            store.saveState({
+              ...state,
+              clockRollbackDetected: false,
+              status: 'ACTIVE',
+              updatedAtIso: nowIso
+            });
+          }
+        } catch (e: any) {
+          console.error('[Revalidate] OS-Protected Store reset failed:', e.message);
+        }
+
+        // 3. Restart clock monitor service with new baseline
+        try {
+          clockMonitorService.stop();
+          clockMonitorService.start((reason) => {
+            logSecEvent('CLOCK_ROLLBACK_DETECTED', 'FAILURE', undefined, undefined, undefined, { reason });
+            logAuditEvent('CLOCK_ROLLBACK_DETECTED', undefined, undefined, 'ERROR', `Background clock monitor flagged manual time shift or drift: ${reason}`);
+          });
+        } catch (e: any) {
+          console.error('[Revalidate] ClockMonitorService restart failed:', e.message);
+        }
+
+        // 4. Validate license
+        const isProduction = process.env.NODE_ENV === 'production';
+        let validation;
+
+        if (isProduction) {
+          validation = licEngine.validateCurrentLicense({ orgId, deviceId });
+        } else {
+          const devKey = getOrCreateDevKeyPair();
+          const leasePayload = {
+            licenseId: 'LIC-OFFLINE-001',
+            organizationId: orgId,
+            deviceLimit: 100,
+            modules: ['SCAN', 'AUDIT', 'OCR'],
+            issuedAt: new Date().toISOString(),
+            notBefore: new Date(Date.now() - 3600000).toISOString(),
+            expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+            licenseVersion: '8.2.0'
+          };
+          const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
+          validation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+        }
+
+        logSecEvent('LICENSE_REVALIDATED', 'SUCCESS', orgId, undefined, deviceId, { message: 'Clock rollback state cleared successfully.' });
+        logAuditEvent('LICENSE_REVALIDATED', undefined, undefined, 'SUCCESS', 'System clock successfully revalidated and scanning block cleared.');
+
+        return res.json({
+          success: true,
+          valid: true,
+          message: 'System clock correction verified. Scanning is unlocked.',
+          validation
+        });
+      } else {
+        return res.status(400).json({
+          success: false,
+          valid: false,
+          error: 'System clock is still rolled back or invalid.',
+          details: checkDetails
+        });
+      }
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Offline License Upload Endpoint
+  router.post('/license/offline-upload', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { signedLease } = req.body;
+      if (!signedLease) {
+        return res.status(400).json({ error: 'Missing signedLease in request body' });
+      }
+
+      const licEngine = new OfflineLicenseEngine(db);
+      const validation = licEngine.validateLease(signedLease, { orgId, deviceId: req.user!.deviceId });
+
+      if (!validation.valid) {
+        return res.status(400).json({ error: 'Invalid signed lease', validation });
+      }
+
+      res.json({ success: true, validation });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Clock Monitor Heartbeat Log Endpoint
+  router.post('/license/clock-monitor/heartbeat', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const { deltaMs, elapsedPerformanceMs, elapsedDateMs, status } = req.body;
+      const id = `LOG-${crypto.randomUUID().substring(0, 8)}`;
+      db.prepare(`
+        INSERT INTO clock_drift_logs (id, timestamp, delta_ms, elapsed_performance_ms, elapsed_date_ms, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        new Date().toISOString(),
+        Number(deltaMs) || 0,
+        Number(elapsedPerformanceMs) || 0,
+        Number(elapsedDateMs) || 0,
+        status || 'HEALTHY'
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get Clock Monitor Forensic Logs Endpoint
+  router.get('/license/clock-monitor/logs', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const logs = db.prepare('SELECT * FROM clock_drift_logs ORDER BY timestamp DESC LIMIT 1000').all();
+      res.json(logs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Clock Monitor Endpoints
+  router.get('/license/clock-monitor/status', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      res.json({
+        active: true,
+        driftThresholdMs: 10000,
+        checkIntervalMs: 5000,
+        timestamp: new Date().toISOString()
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/license/clock-monitor/check', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      clockMonitorService.checkClock((reason) => {
+        logSecEvent('CLOCK_ROLLBACK_DETECTED', 'FAILURE', undefined, undefined, undefined, { reason });
+        logAuditEvent('CLOCK_ROLLBACK_DETECTED', undefined, undefined, 'ERROR', `Manual clock monitor check flagged manual time shift or drift: ${reason}`);
+      });
+      res.json({ success: true, message: 'Clock check executed successfully.' });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/license/clock-monitor/simulate-rollback', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const reason = req.body.reason || 'Simulated clock rollback manual override.';
+      clockMonitorService.triggerClockRollback(reason, (r) => {
+        logSecEvent('CLOCK_ROLLBACK_DETECTED', 'FAILURE', undefined, undefined, undefined, { reason: r });
+        logAuditEvent('CLOCK_ROLLBACK_DETECTED', undefined, undefined, 'ERROR', `Simulated clock rollback: ${r}`);
+      });
+      res.json({ success: true, message: 'Clock rollback simulated successfully. Scanning blocked.' });
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

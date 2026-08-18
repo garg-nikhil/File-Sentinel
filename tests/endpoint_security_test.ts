@@ -277,6 +277,7 @@ async function runEndpointSecurityTests() {
   console.log('\n========================================================================');
   console.log(`  ALL ${passed}/${passed} ENDPOINT SECURITY TESTS PASSED (100% SUCCESS)`);
   console.log('========================================================================\n');
+  process.exit(0);
 }
 
 runEndpointSecurityTests().catch((err) => {

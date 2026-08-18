@@ -13,6 +13,7 @@ interface ScanViewProps {
   onScanComplete: (scanId: string) => void;
   activeScan: ScanSession | null;
   setActiveScan: (scan: ScanSession | null) => void;
+  isScanLocked?: boolean;
 }
 
 interface UploadedFolder {
@@ -29,7 +30,8 @@ interface UploadedFolder {
 export const ScanView: React.FC<ScanViewProps> = ({
   onScanComplete,
   activeScan,
-  setActiveScan
+  setActiveScan,
+  isScanLocked = false
 }) => {
   const { showToast } = useToast();
   const [uploadedFolders, setUploadedFolders] = useState<UploadedFolder[]>([]);
@@ -159,6 +161,15 @@ export const ScanView: React.FC<ScanViewProps> = ({
   }, [activeScan?.scan_id, activeScan?.status]);
 
   const handleStartScan = async () => {
+    if (isScanLocked) {
+      setErrorMsg('Scanning is locked due to detected system clock manipulation.');
+      showToast({
+        title: 'SCAN ACTION BLOCKED',
+        message: 'A system clock drift or manual modification has been detected. Scanning is disabled until revalidation.',
+        type: 'violation'
+      });
+      return;
+    }
     const selectedFolders = uploadedFolders.filter(f => f.selected && f.status === 'completed');
     if (selectedFolders.length === 0) {
       setErrorMsg('Please upload and select at least one folder to scan.');
@@ -212,6 +223,15 @@ export const ScanView: React.FC<ScanViewProps> = ({
   };
 
   const handleResumeScan = async (scanIdToResume?: string) => {
+    if (isScanLocked) {
+      setErrorMsg('Scanning is locked due to detected system clock manipulation.');
+      showToast({
+        title: 'SCAN ACTION BLOCKED',
+        message: 'A system clock drift or manual modification has been detected. Scanning is disabled until revalidation.',
+        type: 'violation'
+      });
+      return;
+    }
     const targetId = scanIdToResume || activeScan?.scan_id;
     if (!targetId) return;
 

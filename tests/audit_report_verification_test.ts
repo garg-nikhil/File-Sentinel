@@ -213,7 +213,9 @@ async function runVerifiableReportTestSuite() {
   console.log('========================================================================\n');
 }
 
-runVerifiableReportTestSuite().catch(err => {
+runVerifiableReportTestSuite().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Test suite failed with error:', err);
   process.exit(1);
 });

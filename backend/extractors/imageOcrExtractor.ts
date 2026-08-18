@@ -103,58 +103,10 @@ export class ImageOcrExtractor extends BaseExtractor {
   }
 
   /**
-   * Extract textual metadata or embedded chunks from image buffer safely
+   * Do NOT treat metadata or embedded chunks as OCR. Return empty.
    */
-  public extractImageEmbeddedStrings(buffer: Buffer): { text: string; keywords: string[] } {
-    const strings: string[] = [];
-
-    // Safely extract PNG tEXt chunks
-    if (buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
-      let offset = 8;
-      while (offset < buffer.length - 12) {
-        const length = buffer.readUInt32BE(offset);
-        const type = buffer.toString('ascii', offset + 4, offset + 8);
-        if (type === 'tEXt' && length > 0) {
-          const chunkData = buffer.toString('utf8', offset + 8, offset + 8 + length);
-          const nullIdx = chunkData.indexOf('\0');
-          if (nullIdx !== -1) {
-            const val = chunkData.substring(nullIdx + 1).trim();
-            if (val.length > 0) {
-              strings.push(val);
-            }
-          }
-        }
-        offset += 12 + length;
-      }
-    }
-
-    // Safely extract JPEG COM (Comment) chunks
-    if (buffer.length > 4 && buffer[0] === 0xFF && buffer[1] === 0xD8) {
-      let offset = 2;
-      while (offset < buffer.length - 4) {
-        if (buffer[offset] !== 0xFF) break;
-        const marker = buffer[offset + 1];
-        if (marker === 0xFE) { // COM marker
-          const len = buffer.readUInt16BE(offset + 2);
-          const comment = buffer.toString('utf8', offset + 4, offset + 2 + len).trim();
-          if (comment.length > 0) {
-            strings.push(comment);
-          }
-          offset += 2 + len;
-        } else if (marker === 0xDA || marker === 0xD9) { // SOS or EOI
-          break;
-        } else {
-          const len = buffer.readUInt16BE(offset + 2);
-          offset += 2 + len;
-        }
-      }
-    }
-
-    const combined = strings.join(' ');
-    return {
-      text: combined.slice(0, this.config.maxOCRTextBytes),
-      keywords: strings.slice(0, 100)
-    };
+  public extractImageEmbeddedStrings(_buffer: Buffer): { text: string; keywords: string[] } {
+    return { text: '', keywords: [] };
   }
 
   /**
@@ -170,8 +122,17 @@ export class ImageOcrExtractor extends BaseExtractor {
       return result;
     }
 
+    // Normalize GSTIN candidates (correcting OCR O/0 letter-digit confusions)
+    const normalizedText = text.replace(/\b([0-9O]{2}[A-Z]{5}[0-9O]{4}[A-Z]{1}[1-9A-ZO]{1}Z[0-9A-ZO]{1,2})\b/gi, (match) => {
+      const state = match.slice(0, 2).replace(/O/gi, '0');
+      const panLetters = match.slice(2, 7).toUpperCase();
+      const panNums = match.slice(7, 11).replace(/O/gi, '0');
+      const tail = match.slice(11).toUpperCase();
+      return `${state}${panLetters}${panNums}${tail}`;
+    });
+
     // GSTIN extraction (15 alphanum standard format)
-    const gstinMatch = text.match(/\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/);
+    const gstinMatch = normalizedText.match(/\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/);
     if (gstinMatch) {
       result.gstin = gstinMatch[1];
       result.hasStructuredFields = true;
@@ -229,11 +190,11 @@ export class ImageOcrExtractor extends BaseExtractor {
     // Entity extraction
     const entityMatch = text.match(/(?:Legal Name|Name of Entity|Insured|Applicant)\s*:?\s*([A-Za-z0-9\s.,&'-]{3,40})/i);
     if (entityMatch) {
-      result.entityName = entityMatch[1].trim();
+      result.entityName = entityMatch[1].split('\n')[0].trim();
     }
 
     // Detect conflicting identifiers in a single image
-    const allGstins = text.match(/\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/g) || [];
+    const allGstins = normalizedText.match(/\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/g) || [];
     const uniqueGstins = Array.from(new Set(allGstins));
     if (uniqueGstins.length > 1) {
       result.conflictingIdentifiers = uniqueGstins;
@@ -336,48 +297,52 @@ export class ImageOcrExtractor extends BaseExtractor {
 
     ImageOcrExtractor.activeOcrCount++;
     try {
-      // First try extracting text via embedded strings / OCR buffer
-      const embedded = this.extractImageEmbeddedStrings(buffer);
-      ocrText = embedded.text;
-
-      // If embedded text is sparse or missing, attempt tesseract offline execution with timeout race
-      if (!ocrText || ocrText.length < 15) {
-        let workerInstance: any = null;
-        try {
-          const timeoutPromise = new Promise<null>((_, reject) => {
-            setTimeout(() => reject(new Error('OCR Timeout Exceeded')), this.config.ocrTimeoutMs);
-          });
-
-          const ocrPromise = (async () => {
-            try {
-              workerInstance = await createWorker('eng', 1, {
-                cachePath: path.join(process.cwd(), '.tesseract_cache'),
-                logger: () => {},
-                errorHandler: () => {}
-              });
-              const ret = await workerInstance.recognize(filePath);
-              await workerInstance.terminate();
-              return ret.data.text;
-            } catch (wErr: any) {
-              if (workerInstance) {
-                try { await workerInstance.terminate(); } catch {}
-              }
-              return '';
+      let workerInstance: any = null;
+      let timer: NodeJS.Timeout | null = null;
+      try {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timer = setTimeout(async () => {
+            if (workerInstance) {
+              try { await workerInstance.terminate(); } catch {}
             }
-          })();
+            reject(new Error(`OCR engine timed out after ${this.config.ocrTimeoutMs}ms`));
+          }, this.config.ocrTimeoutMs);
+        });
 
-          const recognizedText = await Promise.race([ocrPromise, timeoutPromise]);
-          if (recognizedText && recognizedText.trim().length > 0) {
-            ocrText = recognizedText.trim();
+        const ocrPromise = (async () => {
+          try {
+            workerInstance = await createWorker('eng', 1, {
+              cachePath: path.join(process.cwd(), '.tesseract_cache'),
+              logger: () => {},
+              errorHandler: () => {}
+            });
+            const ret = await workerInstance.recognize(filePath);
+            await workerInstance.terminate();
+            workerInstance = null;
+            return ret.data.text || '';
+          } catch (wErr: any) {
+            if (workerInstance) {
+              try { await workerInstance.terminate(); } catch {}
+              workerInstance = null;
+            }
+            return '';
           }
-        } catch (tessErr: any) {
-          if (workerInstance) {
-            try { await workerInstance.terminate(); } catch {}
-          }
-          if (tessErr.message.includes('Timeout')) {
-            ocrStatus = 'PROCESSING_TIMEOUT';
-            warnings.push(`OCR engine timed out after ${this.config.ocrTimeoutMs}ms`);
-          }
+        })();
+
+        const recognizedText = await Promise.race([ocrPromise, timeoutPromise]);
+        if (timer) clearTimeout(timer);
+        if (recognizedText && recognizedText.trim().length > 0) {
+          ocrText = recognizedText.trim();
+        }
+      } catch (tessErr: any) {
+        if (timer) clearTimeout(timer);
+        if (workerInstance) {
+          try { await workerInstance.terminate(); } catch {}
+          workerInstance = null;
+        }
+        if (tessErr.message.includes('timed out') || tessErr.message.includes('Timeout')) {
+          ocrStatus = 'PROCESSING_TIMEOUT';
+          warnings.push(`OCR engine timed out after ${this.config.ocrTimeoutMs}ms`);
         }
       }
 

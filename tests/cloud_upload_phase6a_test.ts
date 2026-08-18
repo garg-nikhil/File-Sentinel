@@ -244,7 +244,9 @@ async function runTests() {
   console.log('=== ALL PHASE 6A CLOUD UPLOAD TESTS PASSED SUCCESSFULLY ===');
 }
 
-runTests().catch(err => {
+runTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('❌ PHASE 6A TEST FAILED:', err);
   process.exit(1);
 });

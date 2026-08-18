@@ -187,7 +187,9 @@ EP-003,SYN-WS-003,Windows 11,BLOCKED,ENFORCED,STRICT-BLOCK-ALL,2026-02-10`;
   console.log('================================================================\n');
 }
 
-runRemediation81Tests().catch(err => {
+runRemediation81Tests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('Test Failed:', err);
   process.exit(1);
 });

@@ -166,7 +166,9 @@ async function runSymlinkTests() {
   console.log('=== ALL 12 SYMLINK & WORKSPACE ESCAPE SECURITY TESTS PASSED ===');
 }
 
-runSymlinkTests().catch(err => {
+runSymlinkTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('❌ SYMLINK SECURITY TEST FAILED:', err);
   process.exit(1);
 });

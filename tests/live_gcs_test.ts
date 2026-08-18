@@ -50,4 +50,6 @@ async function runLiveTest() {
   }
 }
 
-runLiveTest();
+runLiveTest().then(() => {
+  process.exit(0);
+});

@@ -402,6 +402,7 @@ async function runTenantIsolationTestSuite() {
   console.log('\n========================================================================');
   console.log('  ALL 35 TENANT ISOLATION & IDOR SECURITY TESTS PASSED SUCCESSFULLY!    ');
   console.log('========================================================================\n');
+  process.exit(0);
 }
 
 runTenantIsolationTestSuite().catch(err => {

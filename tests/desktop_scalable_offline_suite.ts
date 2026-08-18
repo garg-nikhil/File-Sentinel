@@ -450,6 +450,7 @@ async function runScalableOfflineTestSuite() {
   console.log('\n========================================================================');
   console.log(`  ALL ${passedTests}/${totalTests} TESTS PASSED PERFECTLY (100% SUCCESS)`);
   console.log('========================================================================\n');
+  process.exit(0);
 }
 
 runScalableOfflineTestSuite().catch(err => {

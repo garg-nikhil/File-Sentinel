@@ -237,7 +237,9 @@ async function runResourceExhaustionTests() {
   }
 }
 
-runResourceExhaustionTests().catch(e => {
+runResourceExhaustionTests().then(() => {
+  process.exit(0);
+}).catch(e => {
   console.error('Fatal test error:', e);
   process.exit(1);
 });

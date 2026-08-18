@@ -272,7 +272,9 @@ Date of Audit: 30/01/2026`;
   console.log('====================================================\n');
 }
 
-runDateRemediationTestSuite().catch(err => {
+runDateRemediationTestSuite().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('\n❌ Safe Date & Expiry Test Suite Failed:\n', err);
   process.exit(1);
 });

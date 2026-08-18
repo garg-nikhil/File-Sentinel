@@ -77,13 +77,121 @@ export class ChecklistManager {
     } catch {}
   }
 
+  private validatePropertiesAllowlist(manifest: any, controls: any[]): string[] {
+    const errors: string[] = [];
+    const allowedManifestKeys = new Set([
+      'id', 'version', 'name', 'description', 'publisher', 'minimumEngineVersion', 'controlCount', 'categoryWeights', 'createdAt', 'updatedAt'
+    ]);
+    const allowedControlKeys = new Set([
+      'id', 'name', 'category', 'severity', 'description', 'domain', 'evidence_requirements', 'supported_formats', 'required_fields', 'evaluation_type', 'logic', 'fatal', 'keywords', 'requires_validity_check', 'expiry_required', 'requires_human_review', 'distinguish_policy', 'evaluation_rules', 'enabled'
+    ]);
+
+    // Check manifest keys & types
+    for (const key of Object.keys(manifest)) {
+      if (!allowedManifestKeys.has(key)) {
+        errors.push(`Checklist manifest contains disallowed property: '${key}'`);
+      }
+      const val = manifest[key];
+      if (key === 'categoryWeights' && val !== undefined) {
+        if (typeof val !== 'object' || Array.isArray(val) || val === null) {
+          errors.push('manifest.categoryWeights must be a simple key-value object.');
+        } else {
+          for (const k of Object.keys(val)) {
+            if (typeof val[k] !== 'number') {
+              errors.push(`manifest.categoryWeights['${k}'] must be a number.`);
+            }
+          }
+        }
+      } else if (key === 'controlCount') {
+        if (typeof val !== 'number') errors.push('manifest.controlCount must be a number.');
+      } else if (val !== undefined && typeof val !== 'string') {
+        errors.push(`manifest.${key} must be a string.`);
+      }
+    }
+
+    // Check each control keys & types
+    for (let idx = 0; idx < (controls || []).length; idx++) {
+      const c = controls[idx];
+      if (!c || typeof c !== 'object' || Array.isArray(c)) {
+        errors.push(`Control at index ${idx} must be a valid object.`);
+        continue;
+      }
+      for (const key of Object.keys(c)) {
+        if (!allowedControlKeys.has(key)) {
+          errors.push(`Control '${c.id || idx}' contains disallowed property: '${key}'`);
+        }
+        const val = c[key];
+        if (val === undefined) continue;
+
+        if (['fatal', 'requires_validity_check', 'expiry_required', 'requires_human_review', 'distinguish_policy', 'enabled'].includes(key)) {
+          if (typeof val !== 'boolean') {
+            errors.push(`Control '${c.id || idx}' property '${key}' must be a boolean.`);
+          }
+        } else if (['evidence_requirements', 'supported_formats', 'required_fields', 'keywords', 'evaluation_rules'].includes(key)) {
+          if (!Array.isArray(val)) {
+            errors.push(`Control '${c.id || idx}' property '${key}' must be an array.`);
+          } else {
+            for (let j = 0; j < val.length; j++) {
+              if (typeof val[j] !== 'string') {
+                errors.push(`Control '${c.id || idx}' property '${key}' element at index ${j} must be a string.`);
+              }
+            }
+          }
+        } else {
+          if (typeof val !== 'string') {
+            errors.push(`Control '${c.id || idx}' property '${key}' must be a string.`);
+          }
+        }
+      }
+    }
+
+    return errors;
+  }
+
   public validatePackage(manifest: ChecklistManifest, controls: ChecklistControl[]): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
     const CURRENT_ENGINE_VERSION = '8.2.0';
 
+    const validateInputSafetyRecursive = (val: any, depth: number = 0): void => {
+      if (depth > 3) {
+        throw new Error('Checklist contains deeply nested objects exceeding safety limit of 3 levels.');
+      }
+      if (val === null || val === undefined) {
+        return;
+      }
+      if (typeof val === 'object') {
+        const keys = Object.keys(val);
+        if (keys.length > 30) {
+          throw new Error('Checklist object contains an excessive number of properties.');
+        }
+        for (const key of keys) {
+          if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+            throw new Error(`SECURITY VIOLATION: Forbidden prototype key '${key}' detected.`);
+          }
+          const propertyDescriptor = Object.getOwnPropertyDescriptor(val, key);
+          if (propertyDescriptor && (propertyDescriptor.get || propertyDescriptor.set)) {
+            throw new Error('SECURITY VIOLATION: Forbidden getter/setter property descriptor detected.');
+          }
+          validateInputSafetyRecursive(val[key], depth + 1);
+        }
+      }
+    };
+
+    try {
+      validateInputSafetyRecursive(manifest);
+      validateInputSafetyRecursive(controls);
+    } catch (err: any) {
+      errors.push(`SECURITY VIOLATION: ${err.message}`);
+      return { valid: false, errors };
+    }
+
     if (!manifest || typeof manifest !== 'object') {
       return { valid: false, errors: ['Manifest object missing or invalid.'] };
     }
+
+    // Properties allowlist & type validation
+    const allowlistErrors = this.validatePropertiesAllowlist(manifest, controls);
+    errors.push(...allowlistErrors);
 
     if (!manifest.id || typeof manifest.id !== 'string' || !/^[A-Z0-9_-]+$/i.test(manifest.id)) {
       errors.push(`Invalid checklist ID: '${manifest.id}'. Must be alphanumeric with hyphens/underscores.`);

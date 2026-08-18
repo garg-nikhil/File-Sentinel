@@ -288,7 +288,9 @@ Expiry Date: 2027-07-10`),
   console.log('====================================================\n');
 }
 
-runEvidenceHardeningTests().catch(err => {
+runEvidenceHardeningTests().then(() => {
+  process.exit(0);
+}).catch(err => {
   console.error('\n❌ Evidence Hardening Test Suite Failed:', err);
   process.exit(1);
 });

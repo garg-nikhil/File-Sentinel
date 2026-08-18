@@ -604,5 +604,45 @@ export const api = {
     const res = await fetch('/api/endpoint/targets');
     if (!res.ok) return [];
     return res.json();
+  },
+
+  async getOfflineLicenseStatus() {
+    const res = await fetch('/api/license/offline-status');
+    if (!res.ok) {
+      throw new Error('Failed to fetch offline license status');
+    }
+    return res.json();
+  },
+
+  async revalidateOfflineLicense() {
+    const res = await fetch('/api/license/revalidate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || err.details || 'Failed to revalidate license clock');
+    }
+    return res.json();
+  },
+
+  async logClockMonitorHeartbeat(metrics: { deltaMs: number; elapsedPerformanceMs: number; elapsedDateMs: number; status: string }) {
+    const res = await fetch('/api/license/clock-monitor/heartbeat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(metrics)
+    });
+    if (!res.ok) {
+      throw new Error('Failed to log clock monitor heartbeat');
+    }
+    return res.json();
+  },
+
+  async getClockMonitorLogs(): Promise<Array<{ id: string; timestamp: string; delta_ms: number; elapsed_performance_ms: number; elapsed_date_ms: number; status: string }>> {
+    const res = await fetch('/api/license/clock-monitor/logs');
+    if (!res.ok) {
+      throw new Error('Failed to fetch clock monitor forensic logs');
+    }
+    return res.json();
   }
 };

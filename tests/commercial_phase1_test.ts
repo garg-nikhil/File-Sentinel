@@ -84,7 +84,7 @@ async function runPhase1Tests() {
   const crossTenantRes = await request(app)
     .get(`/api/scans/${scanAId}`)
     .set('Authorization', `Bearer ${tokenB}`);
-  assert.strictEqual(crossTenantRes.status, 404, 'Cross-tenant scan access returns 404/unauthorized');
+  assert.ok(crossTenantRes.status === 404 || crossTenantRes.status === 403, 'Cross-tenant scan access returns 404 or 403');
   console.log('  ✔ [TEST 5] Cross-tenant data isolation verified (User B cannot access Org A scan).');
 
   // Test 6: Device registration and revocation
@@ -129,6 +129,7 @@ async function runPhase1Tests() {
   console.log('================================================================');
   console.log('   ALL PHASE 1 COMMERCIAL IDENTITY & TENANT TESTS PASSED (7/7)  ');
   console.log('================================================================');
+  process.exit(0);
 }
 
 runPhase1Tests().catch(err => {

@@ -53,8 +53,10 @@ async function startServer() {
     });
   }
 
-  const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`[FileSentinel] Local-First Security Server running on http://localhost:${PORT}`);
+  const HOST = process.env.HOST || (process.env.TAURI_DESKTOP ? '127.0.0.1' : '0.0.0.0');
+
+  const server = app.listen(PORT, HOST, () => {
+    console.log(`[FileSentinel] Local-First Security Server running on http://${HOST}:${PORT}`);
   });
 
   server.headersTimeout = 60000;

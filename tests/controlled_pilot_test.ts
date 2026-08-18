@@ -65,5 +65,11 @@ export function runControlledPilotTests() {
 }
 
 if (process.argv[1] && process.argv[1].endsWith('controlled_pilot_test.ts')) {
-  runControlledPilotTests();
+  try {
+    runControlledPilotTests();
+    process.exit(0);
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
 }

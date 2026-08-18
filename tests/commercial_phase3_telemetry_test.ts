@@ -390,6 +390,7 @@ async function runPhase3TelemetryTests() {
   console.log('================================================================');
   console.log('   ALL PHASE 3 PRIVACY TELEMETRY TESTS PASSED (12/12)            ');
   console.log('================================================================');
+  process.exit(0);
 }
 
 runPhase3TelemetryTests().catch(err => {

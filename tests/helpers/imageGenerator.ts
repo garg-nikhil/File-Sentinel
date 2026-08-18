@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { createCanvas } from '@napi-rs/canvas';
 
 export interface ImageFixtureOptions {
   filename: string;
@@ -11,7 +12,7 @@ export interface ImageFixtureOptions {
 }
 
 /**
- * Creates genuine PNG binary image files for adversarial testing
+ * Creates genuine PNG binary image files with visual rendered text for OCR testing
  */
 export function createSyntheticPngImage(dir: string, options: ImageFixtureOptions): string {
   const filePath = path.join(dir, options.filename);
@@ -23,63 +24,44 @@ export function createSyntheticPngImage(dir: string, options: ImageFixtureOption
     return filePath;
   }
 
-  // PNG Magic Header: 89 50 4E 47 0D 0A 1A 0A
-  const header = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+  // Render text onto canvas if payload is provided
+  const canvas = createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
 
-  // IHDR chunk data (13 bytes)
-  const ihdrData = Buffer.alloc(13);
-  ihdrData.writeUInt32BE(width, 0);
-  ihdrData.writeUInt32BE(height, 4);
-  ihdrData[8] = 8; // bit depth
-  ihdrData[9] = 6; // color type (RGBA)
-  ihdrData[10] = 0; // compression
-  ihdrData[11] = 0; // filter
-  ihdrData[12] = 0; // interlace
+  // Fill canvas background
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, width, height);
 
-  const ihdrTypeAndData = Buffer.concat([Buffer.from('IHDR', 'ascii'), ihdrData]);
-  const ihdrCrc = zlib.crc32(ihdrTypeAndData);
+  if (options.textPayload && options.textPayload.trim().length > 0) {
+    ctx.fillStyle = '#000000';
+    ctx.font = 'bold 24px sans-serif';
 
-  const ihdrChunk = Buffer.alloc(8 + 13 + 4);
-  ihdrChunk.writeUInt32BE(13, 0);
-  ihdrTypeAndData.copy(ihdrChunk, 4);
-  ihdrChunk.writeUInt32BE(ihdrCrc, 4 + 17);
+    // Break text payload into multiple lines
+    const text = options.textPayload;
+    const words = text.split(' ');
+    let line = '';
+    let y = 60;
+    const lineHeight = 36;
+    const maxLineWidth = width - 80;
 
-  // tEXt Chunk with raw text payload
-  const textContent = options.textPayload || '';
-  const key = 'Comment\0';
-  const textChunkLen = Buffer.byteLength(key) + Buffer.byteLength(textContent, 'utf8');
-  const textChunkData = Buffer.alloc(textChunkLen);
-  textChunkData.write(key, 0, 'ascii');
-  textChunkData.write(textContent, key.length, 'utf8');
+    for (let i = 0; i < words.length; i++) {
+      const testLine = line + words[i] + ' ';
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxLineWidth && i > 0) {
+        ctx.fillText(line.trim(), 40, y);
+        line = words[i] + ' ';
+        y += lineHeight;
+        if (y > height - 40) break;
+      } else {
+        line = testLine;
+      }
+    }
+    if (line && y <= height - 20) {
+      ctx.fillText(line.trim(), 40, y);
+    }
+  }
 
-  const textTypeAndData = Buffer.concat([Buffer.from('tEXt', 'ascii'), textChunkData]);
-  const textCrc = zlib.crc32(textTypeAndData);
-
-  const textChunk = Buffer.alloc(8 + textChunkLen + 4);
-  textChunk.writeUInt32BE(textChunkLen, 0);
-  textTypeAndData.copy(textChunk, 4);
-  textChunk.writeUInt32BE(textCrc, 4 + 4 + textChunkLen);
-
-  // IDAT chunk (compressed pixel data: 1 byte filter per line + RGBA pixels)
-  const rawPixelLines = Buffer.alloc(height * (1 + width * 4));
-  const compressedPixels = zlib.deflateSync(rawPixelLines);
-  const idatTypeAndData = Buffer.concat([Buffer.from('IDAT', 'ascii'), compressedPixels]);
-  const idatCrc = zlib.crc32(idatTypeAndData);
-
-  const idatChunk = Buffer.alloc(8 + compressedPixels.length + 4);
-  idatChunk.writeUInt32BE(compressedPixels.length, 0);
-  idatTypeAndData.copy(idatChunk, 4);
-  idatChunk.writeUInt32BE(idatCrc, 4 + 4 + compressedPixels.length);
-
-  // IEND chunk
-  const iendTypeAndData = Buffer.from('IEND', 'ascii');
-  const iendCrc = zlib.crc32(iendTypeAndData);
-  const iendChunk = Buffer.alloc(12);
-  iendChunk.writeUInt32BE(0, 0);
-  iendTypeAndData.copy(iendChunk, 4);
-  iendChunk.writeUInt32BE(iendCrc, 8);
-
-  const fullPng = Buffer.concat([header, ihdrChunk, textChunk, idatChunk, iendChunk]);
-  fs.writeFileSync(filePath, fullPng);
+  const pngBuffer = canvas.toBuffer('image/png');
+  fs.writeFileSync(filePath, pngBuffer);
   return filePath;
 }
