@@ -7,12 +7,14 @@ import { OfflineLicenseEngine, getOrCreateDevKeyPair } from '../backend/licensin
 import { ProtectedLicenseStore } from '../backend/licensing/protectedLicenseStore.js';
 
 async function runTest() {
+  process.env.FILE_SENTINEL_DEV_MODE = 'true';
   console.log('================================================================');
   console.log('          FILE-SENTINEL: Clock Monitor Background Service Test ');
   console.log('================================================================');
 
   const db = getDatabase(':memory:');
   const tempStorePath = path.join(process.cwd(), `test_store_clock_monitor_${Math.floor(Math.random() * 100000)}.dat`);
+  let monitor: ClockMonitorService | null = null;
 
   try {
     // 1. Initialize Tables & Dummy Lease
@@ -143,6 +145,7 @@ async function runTest() {
     console.log('  ✔ [TEST 2] Future-dated max-seen protection verified successfully.');
 
   } finally {
+    try { monitor.stop(); } catch {}
     // Cleanup temporary protected store
     if (fs.existsSync(tempStorePath)) {
       fs.unlinkSync(tempStorePath);
@@ -152,6 +155,7 @@ async function runTest() {
   console.log('================================================================');
   console.log('          ALL CLOCK MONITOR SECURITY TESTS PASSED!');
   console.log('================================================================');
+  process.exit(0);
 }
 
 runTest().catch(err => {

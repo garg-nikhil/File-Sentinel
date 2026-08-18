@@ -8,6 +8,7 @@ import { createApiRouter } from '../backend/routes.js';
 import { securityHeaders, corsMiddleware, enforceContentType, rateLimiter, safeErrorHandler } from '../backend/securityMiddleware.js';
 
 async function runNoLocalDeletionRegressionTest() {
+  process.env.FILE_SENTINEL_DEV_MODE = 'true';
   console.log('================================================================');
   console.log('  FileSentinel Non-Destructive Cloud Upload & Deletion Ban Test  ');
   console.log('================================================================');

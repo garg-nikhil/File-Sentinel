@@ -71,7 +71,8 @@ export class OSKeyProtection {
         }).trim();
         return Buffer.from(output, 'base64');
       } catch (err: any) {
-        console.warn('[OSKeyProtection] Windows DPAPI invocation failed, using secure machine-bound envelope:', err?.message);
+        console.error('[OSKeyProtection] Windows DPAPI protection failed! Failing closed.', err?.message);
+        throw new Error(`CRITICAL SECURITY FATAL: Windows DPAPI protection failed: ${err?.message}`);
       }
     }
 
@@ -107,8 +108,9 @@ export class OSKeyProtection {
           stdio: ['ignore', 'pipe', 'ignore']
         }).trim();
         return Buffer.from(output, 'base64');
-      } catch {
-        // If DPAPI fails on Windows (e.g. transferred to another machine or user), return null
+      } catch (err: any) {
+        // If DPAPI fails on Windows (e.g. transferred to another machine or user), fail closed
+        console.error('[OSKeyProtection] Windows DPAPI unprotect failed (wrong user or tampered state).');
         return null;
       }
     }
@@ -140,8 +142,11 @@ export class OSKeyProtection {
    * Fails closed with an explicit exception if the key is unavailable, tampered, or copied from another machine.
    */
   public static getOrGenerateDatabaseKey(): string {
-    if (process.env.FILE_SENTINEL_PROTECTED_KEY_OVERRIDE) {
-      return process.env.FILE_SENTINEL_PROTECTED_KEY_OVERRIDE;
+    // Only permit key override in explicit dev mode and never in production
+    if (process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production') {
+      if (process.env.FILE_SENTINEL_PROTECTED_KEY_OVERRIDE) {
+        return process.env.FILE_SENTINEL_PROTECTED_KEY_OVERRIDE;
+      }
     }
 
     const keyPath = this.getProtectedKeyPath();

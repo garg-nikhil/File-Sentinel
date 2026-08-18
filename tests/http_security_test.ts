@@ -6,6 +6,7 @@ import { createApiRouter } from '../backend/routes.js';
 import { securityHeaders, corsMiddleware, enforceContentType, rateLimiter, safeErrorHandler } from '../backend/securityMiddleware.js';
 
 async function runHttpSecurityTests() {
+  process.env.FILE_SENTINEL_DEV_MODE = 'true';
   console.log('================================================================');
   console.log('  FileSentinel Remediation 7.3: HTTP / API Security Test Suite  ');
   console.log('================================================================');

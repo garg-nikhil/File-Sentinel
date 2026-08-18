@@ -1,0 +1,20 @@
+{
+  "payload": {
+    "version": "8.2.0-rc1",
+    "issuedAt": "2026-08-18T11:12:20.138Z",
+    "files": {
+      "backend/auth.ts": "c5f413bf83cb2eb9f2aaf90a4221615ff4db58ef7cc53157a15a29b161a439f8",
+      "backend/db.ts": "486ad3e900de6a3e4e883dfe8f6dc1096c2ef1b4d575f384f30509d3357d6e08",
+      "backend/licensing.ts": "0b316a2ada7f49aeed184dda092799d8d41fd9c94a353c1f089925fd89bc7b15",
+      "backend/routes.ts": "3a0e0653eaf738489b47cf6b5d9de6ad8232dec4735de23d637a91a5a5f73ba6",
+      "backend/securityMiddleware.ts": "52684ae89461920d084678ebe03c998ed3341f40b4dd2498542fa240ba4c153b",
+      "backend/osKeyProtection.ts": "97a0485075807b7c5ed8d3f0f4371c2f20aa792c3e31a1fe7e625db47294c93c",
+      "backend/fimManifest.ts": "7834f9c8b43d68cd906a24c1e3b688363d2d2d82a28706b9394fcc4ea7b645d6",
+      "backend/fimService.ts": "79bdc6d0409cf26262c83b5187a2e7aff5057010352ebc00a161daf4de82e0dd",
+      "backend/licensing/offlineLicense.ts": "319e0d028f1f1272f33ba0bd5501c419264e70dd29c9484de3e3f26ff43e78a5",
+      "backend/licensing/protectedLicenseStore.ts": "89432067976839fee650b360ee10d656b8ba24d9ecf069b437f1d421562881d6"
+    }
+  },
+  "signature": "0tDgodUpFg8Ro529f88nWwmckgl2BHbS/IjLfS0QJEHkRYMjYjmMI4+IAeBlsw4v2NCgt1XBjZTdel/k0F/2Dg==",
+  "publicKeyId": "fs-fim-root-2026"
+}

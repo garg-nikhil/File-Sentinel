@@ -59,10 +59,14 @@ MCowBQYDK2VwAyEA4P2z6N7FhHq8yXq0l8+0eI4XbZqVl5m8pZ1n5xZ3d8A=
   'fs-test-key': '' // Will be generated or dynamically bound for tests
 };
 
-// Keypair for self-signed development/test leases
+// Keypair for self-signed development/test leases (Gated by FILE_SENTINEL_DEV_MODE === 'true')
 let devKeyPair: { publicKey: string; privateKey: string } | null = null;
 
 export function getOrCreateDevKeyPair(): { publicKey: string; privateKey: string } {
+  if (process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
+    throw new Error('SECURITY FATAL: Local development license generation is strictly prohibited in production mode.');
+  }
+
   if (!devKeyPair) {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
       publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -170,9 +174,13 @@ export class OfflineLicenseEngine {
   }
 
   /**
-   * Server-side helper to sign a lease payload with a private key
+   * Server-side helper to sign a lease payload with a private key (Development / Authority mode only)
    */
   public static signLease(payload: LicenseLeasePayload, privateKeyPem: string, keyId: string = 'fs-dev-key'): SignedLicenseLease {
+    if (process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
+      throw new Error('SECURITY FATAL: Local license lease signing is strictly prohibited in production mode. Leases must be issued by the FileSentinel Cloud Licensing Authority.');
+    }
+
     const canonicalString = JSON.stringify(payload, Object.keys(payload).sort());
     const dataBuf = Buffer.from(canonicalString, 'utf8');
     const privateKeyBuf = Buffer.from(privateKeyPem, 'utf8');
@@ -193,7 +201,7 @@ export class OfflineLicenseEngine {
    */
   public static verifySignature(signedLease: SignedLicenseLease, customPublicKeyPem?: string): boolean {
     try {
-      const isProduction = process.env.NODE_ENV === 'production';
+      const isProduction = process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true';
       let pubKey: string | undefined;
 
       if (isProduction) {
@@ -223,8 +231,6 @@ export class OfflineLicenseEngine {
       const dataBuf = Buffer.from(canonicalString, 'utf8');
       const sigBuf = Buffer.from(signedLease.signature, 'base64');
       const verified = crypto.verify(null, dataBuf, pubKey, sigBuf);
-
-      // Never attempt to zero public keys!
 
       return verified;
     } catch {

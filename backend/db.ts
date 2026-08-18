@@ -94,32 +94,80 @@ export function decryptDatabaseFile(sourceEncPath: string, targetPlainPath: stri
   fs.writeFileSync(targetPlainPath, plainData, { mode: 0o600 });
 }
 
+/**
+ * Persists an active in-memory SQLite database to a target AES-256-GCM encrypted file at rest.
+ * Ensures no plaintext temporary file lingers on disk after the operation.
+ */
+export function persistDatabaseToEncryptedFile(db: DatabaseSync, targetEncPath: string, keyHex?: string): void {
+  const targetDir = path.dirname(targetEncPath);
+  if (!fs.existsSync(targetDir)) {
+    fs.mkdirSync(targetDir, { recursive: true });
+  }
+
+  const tempVacPath = path.join(targetDir, `.tmp_vac_${crypto.randomBytes(8).toString('hex')}.db`);
+  try {
+    db.exec(`VACUUM INTO '${tempVacPath}';`);
+    const plainBytes = fs.readFileSync(tempVacPath);
+    const encBytes = encryptDatabaseBuffer(plainBytes, keyHex);
+    fs.writeFileSync(targetEncPath, encBytes, { mode: 0o600 });
+  } catch (err: any) {
+    console.error(`[DATABASE PERSISTENCE ERROR] Failed to save encrypted database to ${targetEncPath}:`, err.message);
+  } finally {
+    if (fs.existsSync(tempVacPath)) {
+      try { fs.unlinkSync(tempVacPath); } catch {}
+    }
+  }
+}
+
 export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync {
   if (dbPath === './filesentinel.db' && defaultDbInstance) {
     return defaultDbInstance;
   }
 
+  const isMemory = dbPath === ':memory:';
   const dbDir = path.dirname(dbPath);
-  if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
+  if (!isMemory && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
   const initDb = (filePath: string): DatabaseSync => {
-    let activeFilePath = filePath;
-    let tempDecryptedPath: string | null = null;
+    // We execute the live production database in memory to ensure no plaintext file is exposed on disk
+    const db = new DatabaseSync(':memory:');
 
-    if (filePath !== ':memory:' && fs.existsSync(filePath)) {
+    if (!isMemory && fs.existsSync(filePath)) {
       if (isEncryptedDatabaseFile(filePath)) {
         // Authenticated decryption required
         const encBytes = fs.readFileSync(filePath);
         const decryptedBytes = decryptDatabaseBuffer(encBytes);
-        tempDecryptedPath = path.join(path.dirname(filePath), `.tmp_sec_${crypto.randomBytes(8).toString('hex')}.db`);
-        fs.writeFileSync(tempDecryptedPath, decryptedBytes, { mode: 0o600 });
-        activeFilePath = tempDecryptedPath;
+
+        const tempStagePath = path.join(path.dirname(filePath), `.tmp_stage_${crypto.randomBytes(8).toString('hex')}.db`);
+        try {
+          fs.writeFileSync(tempStagePath, decryptedBytes, { mode: 0o600 });
+          db.exec(`ATTACH DATABASE '${tempStagePath}' AS staged_src;`);
+
+          const tables = db.prepare("SELECT name, sql FROM staged_src.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string; sql: string }[];
+          for (const t of tables) {
+            db.exec(t.sql);
+            db.exec(`INSERT INTO main."${t.name}" SELECT * FROM staged_src."${t.name}"`);
+          }
+
+          const indexes = db.prepare("SELECT sql FROM staged_src.sqlite_master WHERE type='index' AND sql IS NOT NULL").all() as { sql: string }[];
+          for (const idx of indexes) {
+            try { db.exec(idx.sql); } catch {}
+          }
+
+          db.exec('DETACH DATABASE staged_src;');
+        } finally {
+          if (fs.existsSync(tempStagePath)) {
+            try { fs.unlinkSync(tempStagePath); } catch {}
+          }
+        }
+      } else {
+        if (process.env.NODE_ENV === 'production' && process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
+          throw new Error('SECURITY FATAL: Plaintext SQLite database detected on disk. Production database must be encrypted at rest.');
+        }
       }
     }
-
-    const db = new DatabaseSync(activeFilePath);
 
     // Verify DB integrity and fail closed on authentication/decryption failure
     try {
@@ -131,9 +179,6 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         throw new Error('SQLite integrity check failed or decryption key is incorrect.');
       }
     } catch (err: any) {
-      if (tempDecryptedPath && fs.existsSync(tempDecryptedPath)) {
-        try { fs.unlinkSync(tempDecryptedPath); } catch {}
-      }
       console.error('[DATABASE SECURITY FATAL] Decryption/integrity check failed. FAILING CLOSED.', err.message);
       throw new Error(`SECURITY FATAL: Database decryption or integrity check failed. Fail-closed enforced. Reason: ${err.message}`);
     }
@@ -902,6 +947,16 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       }
     }
 
+    if (!isMemory) {
+      persistDatabaseToEncryptedFile(db, filePath);
+
+      // Register shutdown handler for clean exit persistence
+      const saveOnExit = () => {
+        try { persistDatabaseToEncryptedFile(db, filePath); } catch {}
+      };
+      process.once('beforeExit', saveOnExit);
+    }
+
     return db;
   };
 
@@ -909,6 +964,9 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
   try {
     instance = initDb(dbPath);
   } catch (err: any) {
+    if (err?.message?.includes('SECURITY FATAL')) {
+      throw err;
+    }
     if (err?.code === 'ERR_SQLITE_ERROR' || err?.message?.includes('malformed')) {
       console.warn(`[SQLite] Database corrupt (${err.message}). Removing and recreating fresh database.`);
       try {

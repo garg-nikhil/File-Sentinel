@@ -40,16 +40,74 @@ export class ProtectedLicenseStore {
   }
 
   /**
-   * Generate deterministic machine hardware fingerprint
+   * Reads the stable OS machine UUID / machine-id
    */
-  public static getMachineFingerprint(): string {
+  public static getStableOsIdentity(): string {
     const hostname = os.hostname();
     const platform = os.platform();
     const arch = os.arch();
-    const cpus = os.cpus().map(c => c.model).join(';');
-    const mem = os.totalmem().toString();
 
-    const raw = `MACHINE_FP_V1::${hostname}::${platform}::${arch}::${cpus}::${mem}`;
+    if (platform === 'linux') {
+      const candidates = ['/etc/machine-id', '/var/lib/dbus/machine-id'];
+      for (const file of candidates) {
+        if (fs.existsSync(file)) {
+          try {
+            const id = fs.readFileSync(file, 'utf8').trim();
+            if (id.length > 0) return `LINUX_MID::${id}`;
+          } catch {}
+        }
+      }
+    } else if (platform === 'win32') {
+      try {
+        const script = '(Get-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Cryptography" -Name MachineGuid -ErrorAction SilentlyContinue).MachineGuid';
+        const { execSync } = require('node:child_process');
+        const guid = execSync(`powershell.exe -NoProfile -NonInteractive -Command "${script}"`, {
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'ignore']
+        }).trim();
+        if (guid && guid.length > 0) {
+          return `WIN_MGUID::${guid}`;
+        }
+      } catch {}
+    }
+
+    return `OS_STABLE::${hostname}::${platform}::${arch}`;
+  }
+
+  /**
+   * Retrieves or initializes the persistent protected installation secret
+   */
+  public static getInstallationSecret(): string {
+    const baseDir = process.env.PROGRAMDATA
+      || process.env.APPDATA
+      || path.join(os.homedir(), '.config', 'filesentinel');
+    const secDir = path.join(baseDir, 'FileSentinel', 'security');
+    if (!fs.existsSync(secDir)) {
+      try { fs.mkdirSync(secDir, { recursive: true }); } catch {}
+    }
+    const secretPath = path.join(secDir, 'install_secret.dat');
+    if (fs.existsSync(secretPath)) {
+      try {
+        const secret = fs.readFileSync(secretPath, 'utf8').trim();
+        if (secret.length > 0) return secret;
+      } catch {}
+    }
+
+    const newSecret = crypto.randomBytes(32).toString('hex');
+    try {
+      fs.writeFileSync(secretPath, newSecret, { mode: 0o600 });
+    } catch {}
+    return newSecret;
+  }
+
+  /**
+   * Generate deterministic machine hardware fingerprint based on stable OS identity and installation secret
+   */
+  public static getMachineFingerprint(): string {
+    const osId = ProtectedLicenseStore.getStableOsIdentity();
+    const installSecret = ProtectedLicenseStore.getInstallationSecret();
+
+    const raw = `STABLE_DEVICE_V2::${osId}::${installSecret}`;
     return crypto.createHash('sha256').update(raw).digest('hex');
   }
 
