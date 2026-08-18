@@ -3,9 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import {
   SignedFimManifest,
-  EMBEDDED_MANUFACTURER_MANIFEST,
   verifySignedFimManifest,
-  signFimManifest,
+  isValidManifestStructure,
   TRUSTED_FIM_PUBLIC_KEY
 } from './fimManifest.js';
 
@@ -19,25 +18,6 @@ export interface FimVerificationResult {
 }
 
 export class FileIntegrityMonitor {
-  private static activeManifest: SignedFimManifest = EMBEDDED_MANUFACTURER_MANIFEST;
-  private static trustedPublicKey: string = TRUSTED_FIM_PUBLIC_KEY;
-
-  /**
-   * Sets the active signed manufacturer manifest (e.g. during verified release upgrade or test harness)
-   */
-  public static setManifest(manifest: SignedFimManifest, customPublicKey?: string): void {
-    this.activeManifest = manifest;
-    if (customPublicKey) this.trustedPublicKey = customPublicKey;
-  }
-
-  /**
-   * Resets manifest to original embedded manufacturer baseline
-   */
-  public static resetToEmbeddedManifest(): void {
-    this.activeManifest = EMBEDDED_MANUFACTURER_MANIFEST;
-    this.trustedPublicKey = TRUSTED_FIM_PUBLIC_KEY;
-  }
-
   /**
    * Computes the SHA-256 hash of a file on disk
    */
@@ -52,45 +32,73 @@ export class FileIntegrityMonitor {
   }
 
   /**
-   * Verifies system files against the signed manufacturer manifest.
-   * Fails closed if the manifest signature is invalid, or if any critical file is modified or missing.
+   * Verifies system files against the signed immutable release_manifest.json.
+   * Fails closed if the manifest is missing, tampered, contains placeholder hashes,
+   * fails signature verification, or if any protected file is modified, replaced, or missing.
    */
   public static verifyIntegrity(customBaseDir?: string): FimVerificationResult {
     const verifiedAt = new Date().toISOString();
     const baseDir = customBaseDir || process.cwd();
-
-    // Check for external immutable release_manifest.json if present
-    let manifestToVerify = this.activeManifest;
     const releaseManifestPath = path.join(baseDir, 'release_manifest.json');
-    if (fs.existsSync(releaseManifestPath) && this.activeManifest === EMBEDDED_MANUFACTURER_MANIFEST) {
-      try {
-        const fileContent = fs.readFileSync(releaseManifestPath, 'utf8');
-        const parsed = JSON.parse(fileContent) as SignedFimManifest;
-        if (parsed && parsed.payload && parsed.signature) {
-          manifestToVerify = parsed;
-        }
-      } catch (err: any) {
-        console.error('[FIM SECURITY FATAL] Failed to parse release_manifest.json:', err.message);
-      }
+
+    if (!fs.existsSync(releaseManifestPath)) {
+      console.error('[FIM SECURITY FATAL] release_manifest.json is missing. System quarantined.');
+      return {
+        valid: false,
+        quarantined: true,
+        manifestTampered: true,
+        modifiedFiles: [],
+        missingFiles: ['release_manifest.json'],
+        verifiedAt
+      };
     }
 
-    // 1. Verify that the baseline manifest itself is authentic and manufacturer-signed
-    const isManifestAuthentic = verifySignedFimManifest(manifestToVerify, this.trustedPublicKey);
+    let manifest: SignedFimManifest;
+    try {
+      const fileContent = fs.readFileSync(releaseManifestPath, 'utf8');
+      manifest = JSON.parse(fileContent) as SignedFimManifest;
+    } catch (err: any) {
+      console.error('[FIM SECURITY FATAL] Failed to parse release_manifest.json:', err.message);
+      return {
+        valid: false,
+        quarantined: true,
+        manifestTampered: true,
+        modifiedFiles: [],
+        missingFiles: [],
+        verifiedAt
+      };
+    }
+
+    // 1. Verify that the baseline manifest itself is structurally valid and manufacturer-signed
+    if (!isValidManifestStructure(manifest)) {
+      console.error('[FIM SECURITY FATAL] Manufacturer FIM manifest structure is invalid or contains placeholder hashes. Quarantining system.');
+      return {
+        valid: false,
+        quarantined: true,
+        manifestTampered: true,
+        modifiedFiles: Object.keys(manifest?.payload?.files || {}),
+        missingFiles: [],
+        verifiedAt
+      };
+    }
+
+    const isManifestAuthentic = verifySignedFimManifest(manifest, TRUSTED_FIM_PUBLIC_KEY);
     if (!isManifestAuthentic) {
       console.error('[FIM SECURITY FATAL] Manufacturer FIM manifest signature verification failed! Quarantining system.');
       return {
         valid: false,
         quarantined: true,
         manifestTampered: true,
-        modifiedFiles: Object.keys(manifestToVerify?.payload?.files || {}),
+        modifiedFiles: Object.keys(manifest?.payload?.files || {}),
         missingFiles: [],
         verifiedAt
       };
     }
 
+    // 2. Verify all protected files against their expected SHA-256 hashes
     const modifiedFiles: string[] = [];
     const missingFiles: string[] = [];
-    const manifestFiles = manifestToVerify.payload.files;
+    const manifestFiles = manifest.payload.files;
 
     for (const [relPath, expectedHash] of Object.entries(manifestFiles)) {
       const fullPath = path.join(baseDir, relPath);
@@ -100,7 +108,7 @@ export class FileIntegrityMonitor {
       }
 
       const actualHash = this.computeFileHash(fullPath);
-      if (!actualHash || (expectedHash !== 'EMBEDDED_ANCHOR' && actualHash !== expectedHash)) {
+      if (!actualHash || actualHash !== expectedHash) {
         modifiedFiles.push(relPath);
       }
     }
@@ -116,4 +124,3 @@ export class FileIntegrityMonitor {
     };
   }
 }
-

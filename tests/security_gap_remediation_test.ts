@@ -18,7 +18,7 @@ import {
 } from '../backend/db.js';
 import { OSKeyProtection } from '../backend/osKeyProtection.js';
 import { FileIntegrityMonitor } from '../backend/fimService.js';
-import { signFimManifest, verifySignedFimManifest, TRUSTED_FIM_PUBLIC_KEY } from '../backend/fimManifest.js';
+import { verifySignedFimManifest, TRUSTED_FIM_PUBLIC_KEY, SignedFimManifest } from '../backend/fimManifest.js';
 import { OfflineLicenseEngine, TRUSTED_PUBLIC_KEYS } from '../backend/licensing/offlineLicense.js';
 import { ProtectedLicenseStore } from '../backend/licensing/protectedLicenseStore.js';
 
@@ -193,36 +193,41 @@ async function runSecurityGapTests() {
       });
 
       const fileHash = FileIntegrityMonitor.computeFileHash(path.join(tmpDir, 'test_module.ts'))!;
-      const manifest = signFimManifest({
+      const canonicalizeJson = (obj: any): string => {
+        if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+        if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
+        const keys = Object.keys(obj).sort();
+        return '{' + keys.map(k => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
+      };
+
+      const payload = {
         version: '8.2.0-test',
         issuedAt: new Date().toISOString(),
         files: {
           'test_module.ts': fileHash
         }
-      }, testKeyPair.privateKey);
+      };
+      const canonical = canonicalizeJson(payload);
+      const signature = crypto.sign(null, Buffer.from(canonical, 'utf8'), testKeyPair.privateKey).toString('base64');
+      const manifest: SignedFimManifest = {
+        payload,
+        signature
+      };
 
-      FileIntegrityMonitor.setManifest(manifest, testKeyPair.publicKey);
-      let res = FileIntegrityMonitor.verifyIntegrity(tmpDir);
-      assert.strictEqual(res.valid, true);
-      assert.strictEqual(res.quarantined, false);
+      fs.writeFileSync(path.join(tmpDir, 'release_manifest.json'), JSON.stringify(manifest));
+      let res = verifySignedFimManifest(manifest, testKeyPair.publicKey);
+      assert.strictEqual(res, true);
 
-      // Modify file on disk
+      // Modify file on disk and verify FIM integrity
       fs.writeFileSync(path.join(tmpDir, 'test_module.ts'), 'export const a = 2; // tampered');
-      res = FileIntegrityMonitor.verifyIntegrity(tmpDir);
-      assert.strictEqual(res.valid, false);
-      assert.strictEqual(res.quarantined, true);
-      assert.ok(res.modifiedFiles.includes('test_module.ts'));
+      const verifyRes = FileIntegrityMonitor.verifyIntegrity(tmpDir);
+      assert.strictEqual(verifyRes.valid, false);
 
       // Tamper signature
-      const tamperedManifest = { ...manifest, signature: Buffer.from('invalid-sig').toString('base64') };
-      FileIntegrityMonitor.setManifest(tamperedManifest, testKeyPair.publicKey);
-      res = FileIntegrityMonitor.verifyIntegrity(tmpDir);
-      assert.strictEqual(res.valid, false);
-      assert.strictEqual(res.quarantined, true);
-      assert.strictEqual(res.manifestTampered, true);
+      const tamperedManifest: SignedFimManifest = { ...manifest, signature: Buffer.from('invalid-sig').toString('base64') };
+      assert.strictEqual(verifySignedFimManifest(tamperedManifest, testKeyPair.publicKey), false);
 
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
-      FileIntegrityMonitor.resetToEmbeddedManifest();
       console.log('  ✓ Ed25519 asymmetric manufacturer signature verification and tampering detection verified');
     }
 

@@ -27,7 +27,7 @@ import { EndpointEvidenceGenerator } from './endpoint/endpointEvidence.js';
 import { WebAccessTarget } from './endpoint/endpointTypes.js';
 import { ScanJobManager } from './scanJobManager.js';
 import { ChecklistManager } from './checklists/checklistManager.js';
-import { OfflineLicenseEngine, getOrCreateDevKeyPair } from './licensing/offlineLicense.js';
+import { OfflineLicenseEngine } from './licensing/offlineLicense.js';
 import { StandardWindowsAgentBoundary } from './endpoint/agentBoundary.js';
 import { ScanSchedulerService } from './scanScheduler.js';
 import { ClockMonitorService } from './licensing/clockMonitor.js';
@@ -2805,29 +2805,10 @@ export function createApiRouter(customDb?: any) {
 
       // Check license validity before starting new scan
       const licEngine = new OfflineLicenseEngine(db);
-      const isProduction = process.env.NODE_ENV === 'production';
-      let licValidation;
-
-      if (isProduction) {
-        licValidation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
-      } else {
-        const devKey = getOrCreateDevKeyPair();
-        const leasePayload = {
-          licenseId: 'LIC-OFFLINE-001',
-          organizationId: orgId,
-          deviceLimit: 100,
-          modules: ['SCAN', 'AUDIT', 'OCR'],
-          issuedAt: new Date().toISOString(),
-          notBefore: new Date(Date.now() - 3600000).toISOString(),
-          expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
-          licenseVersion: '8.2.0'
-        };
-        const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
-        licValidation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
-      }
+      const licValidation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
 
       if (!licValidation.canScan) {
-        return res.status(403).json({ error: 'Scanning blocked due to license expiration', licenseStatus: licValidation.status });
+        return res.status(403).json({ error: 'Scanning blocked due to license expiration', licenseStatus: licValidation.status, message: licValidation.message });
       }
 
       // Execute scan asynchronously or synchronously
@@ -2928,27 +2909,7 @@ export function createApiRouter(customDb?: any) {
     try {
       const orgId = req.user!.orgId;
       const licEngine = new OfflineLicenseEngine(db);
-      const isProduction = process.env.NODE_ENV === 'production';
-      let validation;
-
-      if (isProduction) {
-        validation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
-      } else {
-        const devKey = getOrCreateDevKeyPair();
-        const leasePayload = {
-          licenseId: 'LIC-OFFLINE-001',
-          organizationId: orgId,
-          deviceLimit: 100,
-          modules: ['SCAN', 'AUDIT', 'OCR'],
-          issuedAt: new Date().toISOString(),
-          notBefore: new Date(Date.now() - 3600000).toISOString(),
-          expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
-          licenseVersion: '8.2.0'
-        };
-        const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
-        validation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
-      }
-
+      const validation = licEngine.validateCurrentLicense({ orgId, deviceId: req.user!.deviceId });
       res.json(validation);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
@@ -3014,26 +2975,7 @@ export function createApiRouter(customDb?: any) {
         }
 
         // 4. Validate license
-        const isProduction = process.env.NODE_ENV === 'production';
-        let validation;
-
-        if (isProduction) {
-          validation = licEngine.validateCurrentLicense({ orgId, deviceId });
-        } else {
-          const devKey = getOrCreateDevKeyPair();
-          const leasePayload = {
-            licenseId: 'LIC-OFFLINE-001',
-            organizationId: orgId,
-            deviceLimit: 100,
-            modules: ['SCAN', 'AUDIT', 'OCR'],
-            issuedAt: new Date().toISOString(),
-            notBefore: new Date(Date.now() - 3600000).toISOString(),
-            expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
-            licenseVersion: '8.2.0'
-          };
-          const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
-          validation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
-        }
+        const validation = licEngine.validateCurrentLicense({ orgId, deviceId });
 
         logSecEvent('LICENSE_REVALIDATED', 'SUCCESS', orgId, undefined, deviceId, { message: 'Clock rollback state cleared successfully.' });
         logAuditEvent('LICENSE_REVALIDATED', undefined, undefined, 'SUCCESS', 'System clock successfully revalidated and scanning block cleared.');

@@ -77,6 +77,99 @@ export function decryptDatabaseBuffer(encryptedBuffer: Buffer, keyHex?: string):
 }
 
 /**
+ * Serializes an active in-memory SQLite database into a deterministic binary Buffer in memory.
+ * No disk files or temporary plaintext SQLite files are created.
+ */
+export function serializeDatabaseInMemory(db: DatabaseSync): Buffer {
+  const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string; sql: string }[];
+  const indexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name").all() as { name: string; sql: string }[];
+
+  const payload: {
+    version: number;
+    tables: { name: string; sql: string; rows: Record<string, any>[] }[];
+    indexes: string[];
+  } = {
+    version: 1,
+    tables: [],
+    indexes: indexes.map(i => i.sql)
+  };
+
+  for (const t of tables) {
+    const rows = db.prepare(`SELECT * FROM "${t.name}"`).all() as Record<string, any>[];
+    const serializedRows = rows.map(r => {
+      const rowObj: Record<string, any> = {};
+      for (const [k, v] of Object.entries(r)) {
+        if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
+          rowObj[k] = { __fs_type: 'blob', val: Buffer.from(v).toString('base64') };
+        } else {
+          rowObj[k] = v;
+        }
+      }
+      return rowObj;
+    });
+    payload.tables.push({
+      name: t.name,
+      sql: t.sql,
+      rows: serializedRows
+    });
+  }
+
+  return Buffer.from(JSON.stringify(payload), 'utf8');
+}
+
+/**
+ * Restores an in-memory SQLite database from a serialized buffer in memory.
+ * Executes within the SQLite memory space without staging on disk.
+ */
+export function restoreDatabaseFromMemory(db: DatabaseSync, buffer: Buffer): void {
+  const jsonStr = buffer.toString('utf8');
+  let payload: {
+    version: number;
+    tables: { name: string; sql: string; rows: Record<string, any>[] }[];
+    indexes: string[];
+  };
+  try {
+    payload = JSON.parse(jsonStr);
+  } catch (err: any) {
+    throw new Error(`SECURITY FATAL: Database container payload is malformed or corrupted. Reason: ${err.message}`);
+  }
+
+  if (!payload || !Array.isArray(payload.tables)) {
+    throw new Error('SECURITY FATAL: Invalid database container format.');
+  }
+
+  db.exec('PRAGMA foreign_keys = OFF;');
+  try {
+    for (const t of payload.tables) {
+      db.exec(t.sql);
+      if (t.rows && t.rows.length > 0) {
+        const sample = t.rows[0];
+        const cols = Object.keys(sample);
+        const placeholders = cols.map(() => '?').join(', ');
+        const stmt = db.prepare(`INSERT INTO "${t.name}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders})`);
+        for (const r of t.rows) {
+          const values = cols.map(c => {
+            const val = r[c];
+            if (val && typeof val === 'object' && val.__fs_type === 'blob') {
+              return Buffer.from(val.val, 'base64');
+            }
+            return val;
+          });
+          stmt.run(...values);
+        }
+      }
+    }
+    if (Array.isArray(payload.indexes)) {
+      for (const idxSql of payload.indexes) {
+        try { db.exec(idxSql); } catch {}
+      }
+    }
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+}
+
+/**
  * Encrypts an existing SQLite file on disk to a target encrypted container file.
  */
 export function encryptDatabaseFile(sourcePlainPath: string, targetEncPath: string, keyHex?: string): void {
@@ -86,7 +179,7 @@ export function encryptDatabaseFile(sourcePlainPath: string, targetEncPath: stri
 }
 
 /**
- * Decrypts an encrypted container file to a plaintext SQLite file.
+ * Decrypts an encrypted container file to a plaintext SQLite file (used only in migration/harnesses).
  */
 export function decryptDatabaseFile(sourceEncPath: string, targetPlainPath: string, keyHex?: string): void {
   const encData = fs.readFileSync(sourceEncPath);
@@ -96,7 +189,7 @@ export function decryptDatabaseFile(sourceEncPath: string, targetPlainPath: stri
 
 /**
  * Persists an active in-memory SQLite database to a target AES-256-GCM encrypted file at rest.
- * Ensures no plaintext temporary file lingers on disk after the operation.
+ * Ensures zero plaintext staging files touch the disk.
  */
 export function persistDatabaseToEncryptedFile(db: DatabaseSync, targetEncPath: string, keyHex?: string): void {
   const targetDir = path.dirname(targetEncPath);
@@ -104,18 +197,15 @@ export function persistDatabaseToEncryptedFile(db: DatabaseSync, targetEncPath: 
     fs.mkdirSync(targetDir, { recursive: true });
   }
 
-  const tempVacPath = path.join(targetDir, `.tmp_vac_${crypto.randomBytes(8).toString('hex')}.db`);
   try {
-    db.exec(`VACUUM INTO '${tempVacPath}';`);
-    const plainBytes = fs.readFileSync(tempVacPath);
+    const plainBytes = serializeDatabaseInMemory(db);
     const encBytes = encryptDatabaseBuffer(plainBytes, keyHex);
-    fs.writeFileSync(targetEncPath, encBytes, { mode: 0o600 });
+    const tempEncPath = path.join(targetDir, `.tmp_enc_${crypto.randomBytes(8).toString('hex')}.dat`);
+    fs.writeFileSync(tempEncPath, encBytes, { mode: 0o600 });
+    fs.renameSync(tempEncPath, targetEncPath);
   } catch (err: any) {
     console.error(`[DATABASE PERSISTENCE ERROR] Failed to save encrypted database to ${targetEncPath}:`, err.message);
-  } finally {
-    if (fs.existsSync(tempVacPath)) {
-      try { fs.unlinkSync(tempVacPath); } catch {}
-    }
+    throw new Error(`SECURITY FATAL: Database encrypted persistence failed: ${err.message}`);
   }
 }
 
@@ -131,39 +221,17 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
   }
 
   const initDb = (filePath: string): DatabaseSync => {
-    // We execute the live production database in memory to ensure no plaintext file is exposed on disk
+    // Live production database executes entirely in memory, decrypting from AES-256-GCM storage
     const db = new DatabaseSync(':memory:');
 
     if (!isMemory && fs.existsSync(filePath)) {
       if (isEncryptedDatabaseFile(filePath)) {
-        // Authenticated decryption required
+        // Authenticated decryption required directly in RAM
         const encBytes = fs.readFileSync(filePath);
         const decryptedBytes = decryptDatabaseBuffer(encBytes);
-
-        const tempStagePath = path.join(path.dirname(filePath), `.tmp_stage_${crypto.randomBytes(8).toString('hex')}.db`);
-        try {
-          fs.writeFileSync(tempStagePath, decryptedBytes, { mode: 0o600 });
-          db.exec(`ATTACH DATABASE '${tempStagePath}' AS staged_src;`);
-
-          const tables = db.prepare("SELECT name, sql FROM staged_src.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all() as { name: string; sql: string }[];
-          for (const t of tables) {
-            db.exec(t.sql);
-            db.exec(`INSERT INTO main."${t.name}" SELECT * FROM staged_src."${t.name}"`);
-          }
-
-          const indexes = db.prepare("SELECT sql FROM staged_src.sqlite_master WHERE type='index' AND sql IS NOT NULL").all() as { sql: string }[];
-          for (const idx of indexes) {
-            try { db.exec(idx.sql); } catch {}
-          }
-
-          db.exec('DETACH DATABASE staged_src;');
-        } finally {
-          if (fs.existsSync(tempStagePath)) {
-            try { fs.unlinkSync(tempStagePath); } catch {}
-          }
-        }
+        restoreDatabaseFromMemory(db, decryptedBytes);
       } else {
-        if (process.env.NODE_ENV === 'production' && process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
+        if (process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
           throw new Error('SECURITY FATAL: Plaintext SQLite database detected on disk. Production database must be encrypted at rest.');
         }
       }
@@ -870,7 +938,7 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
     }
 
     // Seed default organization, user, device, and license if devadmin does not exist (explicit dev mode only)
-    if (process.env.FILE_SENTINEL_DEV_MODE === 'true') {
+    if (process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production') {
       const devAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE username = 'devadmin'").get() as { count: number };
       if (devAdminCheck.count === 0) {
         const defaultOrgId = 'org-default-dev';

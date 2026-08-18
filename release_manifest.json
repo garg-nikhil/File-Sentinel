@@ -1,20 +1,29 @@
 {
   "payload": {
     "version": "8.2.0-rc1",
-    "issuedAt": "2026-08-18T11:12:20.138Z",
+    "issuedAt": "2026-08-18T14:54:02.961Z",
     "files": {
       "backend/auth.ts": "c5f413bf83cb2eb9f2aaf90a4221615ff4db58ef7cc53157a15a29b161a439f8",
-      "backend/db.ts": "486ad3e900de6a3e4e883dfe8f6dc1096c2ef1b4d575f384f30509d3357d6e08",
+      "backend/db.ts": "20f596951a9c2b20a905899af4506dc07b1c87f8e42341b951d38674fb38d2ae",
       "backend/licensing.ts": "0b316a2ada7f49aeed184dda092799d8d41fd9c94a353c1f089925fd89bc7b15",
-      "backend/routes.ts": "3a0e0653eaf738489b47cf6b5d9de6ad8232dec4735de23d637a91a5a5f73ba6",
+      "backend/routes.ts": "cbe13e021fb8cadb3feeb30f6e271e4f4cf3dedb8033f016a1e8ab401f784108",
       "backend/securityMiddleware.ts": "52684ae89461920d084678ebe03c998ed3341f40b4dd2498542fa240ba4c153b",
-      "backend/osKeyProtection.ts": "97a0485075807b7c5ed8d3f0f4371c2f20aa792c3e31a1fe7e625db47294c93c",
-      "backend/fimManifest.ts": "7834f9c8b43d68cd906a24c1e3b688363d2d2d82a28706b9394fcc4ea7b645d6",
-      "backend/fimService.ts": "79bdc6d0409cf26262c83b5187a2e7aff5057010352ebc00a161daf4de82e0dd",
-      "backend/licensing/offlineLicense.ts": "319e0d028f1f1272f33ba0bd5501c419264e70dd29c9484de3e3f26ff43e78a5",
-      "backend/licensing/protectedLicenseStore.ts": "89432067976839fee650b360ee10d656b8ba24d9ecf069b437f1d421562881d6"
+      "backend/osKeyProtection.ts": "fe09fc1284bd3739f460aac106244af0d236af2d017f542c03a35579fedfa34b",
+      "backend/fimManifest.ts": "fe3e3b1f4fff9db12fad51362e4be6d141f3d4fd1f7a3139f1896a9a636c3673",
+      "backend/fimService.ts": "adf5e65038f7f6f5d6e89bb36c29bb85d9abf7b5f083b0272a020b6f1f79e3bc",
+      "backend/licensing/offlineLicense.ts": "a4e8544db3b54e04cab057c4523192b43183378729cdbc0c12e322e3190150a4",
+      "backend/licensing/protectedLicenseStore.ts": "e4baaba174fd6bab13653b8325e3e3554bcc0aba7ee85aaeb2c38450a02c2fe9",
+      "backend/licensing/clockMonitor.ts": "c36d75022e2c4d9308312101347cec56ebf9701651a933c84510da30b70e3351",
+      "backend/audit/verifiableReportService.ts": "932d161cc7bf82b63c13eebb41f2dc316d6497a4b22630e87cbd96d07d64f391",
+      "backend/scanJobManager.ts": "0234721afe4760b1b8e0c8c11832cc7e413229e6b69054eb1a6dfdbaa954a4cb",
+      "backend/scannerEngine.ts": "5407357a5d1896c850c72baf6a4c9d9f4eb610544915624f99aac821e4e97e8c",
+      "backend/scanScheduler.ts": "f57dd77cee672fc32fdc84ec5c9f824c6d2b4aa62cbdeffc73c93eb179df5bb9",
+      "backend/billing.ts": "f43cde7fd653455e44877c2ab9d03dba9e15f383d12f836b0e5b694d793ed4ff",
+      "backend/telemetry.ts": "970a16c82ab1bee47580d4d73143282848ce9513708ab358d9d7d01f7220e80b",
+      "backend/privacyGovernance.ts": "51265b230779e5838f6b6e5ce095710ba2103fd6ed6c50a201b6645dbfcb22a6",
+      "backend/pilotService.ts": "7395fa608e9443f56f6a7910cb8ef586ad366117845fe31d6e97bdfe4f1e8031"
     }
   },
-  "signature": "0tDgodUpFg8Ro529f88nWwmckgl2BHbS/IjLfS0QJEHkRYMjYjmMI4+IAeBlsw4v2NCgt1XBjZTdel/k0F/2Dg==",
+  "signature": "6dJom/uFV3oms1hNNITu8auNNRgiIRYd5DigX7wLzfAkCB8VXDk+jcoeH+2oFk1bRP8F5ZkeENN3J/MDczLsAw==",
   "publicKeyId": "fs-fim-root-2026"
 }

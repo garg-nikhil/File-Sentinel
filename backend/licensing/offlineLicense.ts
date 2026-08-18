@@ -181,7 +181,14 @@ export class OfflineLicenseEngine {
       throw new Error('SECURITY FATAL: Local license lease signing is strictly prohibited in production mode. Leases must be issued by the FileSentinel Cloud Licensing Authority.');
     }
 
-    const canonicalString = JSON.stringify(payload, Object.keys(payload).sort());
+    const canonicalizeJson = (obj: any): string => {
+      if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+      if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
+      const keys = Object.keys(obj).sort();
+      return '{' + keys.map(k => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
+    };
+
+    const canonicalString = canonicalizeJson(payload);
     const dataBuf = Buffer.from(canonicalString, 'utf8');
     const privateKeyBuf = Buffer.from(privateKeyPem, 'utf8');
     const signature = crypto.sign(null, dataBuf, privateKeyBuf).toString('base64');
@@ -227,7 +234,14 @@ export class OfflineLicenseEngine {
 
       if (!pubKey) return false;
 
-      const canonicalString = JSON.stringify(signedLease.payload, Object.keys(signedLease.payload).sort());
+      const canonicalizeJson = (obj: any): string => {
+        if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
+        if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
+        const keys = Object.keys(obj).sort();
+        return '{' + keys.map(k => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
+      };
+
+      const canonicalString = canonicalizeJson(signedLease.payload);
       const dataBuf = Buffer.from(canonicalString, 'utf8');
       const sigBuf = Buffer.from(signedLease.signature, 'base64');
       const verified = crypto.verify(null, dataBuf, pubKey, sigBuf);
