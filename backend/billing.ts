@@ -142,7 +142,8 @@ export class BillingService {
     this.db = db || getDatabase();
     this.licensingEngine = licensingEngine || new LicensingEngine(this.db);
     this.defaultGracePeriodDays = options?.gracePeriodDays ?? 7;
-    this.webhookSecret = options?.webhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET || 'filesentinel-webhook-secret-secure-2026';
+    // RAZORPAY_WEBHOOK_SECRET is required only for cloud billing webhook operations and must NEVER fall back to hardcoded/random secrets
+    this.webhookSecret = options?.webhookSecret || process.env.RAZORPAY_WEBHOOK_SECRET || '';
   }
 
   public getPlanConfig(planKey: string): PlanDefinition | null {
@@ -261,7 +262,7 @@ export class BillingService {
    */
   public verifyWebhookSignature(rawBody: string, signature: string, secret?: string): boolean {
     const key = secret || this.webhookSecret;
-    if (!signature || !rawBody) return false;
+    if (!key || !signature || !rawBody) return false;
     try {
       const expectedSignature = crypto
         .createHmac('sha256', key)
