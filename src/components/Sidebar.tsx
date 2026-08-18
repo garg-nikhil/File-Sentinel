@@ -15,10 +15,12 @@ import {
   Cloud,
   Fingerprint,
   ShieldCheck,
-  Laptop
+  Laptop,
+  Bell
 } from 'lucide-react';
 import { api } from '../services/api';
 import { LicenseInfo } from '../types';
+import { useToast } from '../context/ToastContext';
 
 export type NavTab =
   | 'dashboard'
@@ -44,6 +46,7 @@ interface SidebarProps {
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isScanning }) => {
   const [license, setLicense] = useState<LicenseInfo | null>(null);
+  const { unreadCount, setIsTrayOpen } = useToast();
 
   useEffect(() => {
     api.getLicense().then(setLicense).catch(() => {});
@@ -69,19 +72,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, setActiveTab, isSca
   return (
     <aside id="app-sidebar" className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between select-none">
       <div>
-        <div className="p-5 border-b border-slate-800 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
-            <Shield className="w-5 h-5" />
+        <div className="p-5 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+              <Shield className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-slate-100 tracking-tight flex items-center gap-2">
+                FileSentinel
+                <span className="text-[10px] font-mono font-normal uppercase bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                  PRO
+                </span>
+              </h1>
+              <p className="text-xs text-slate-400 font-sans">Local DLP & Compliance</p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-base font-bold text-slate-100 tracking-tight flex items-center gap-2">
-              FileSentinel
-              <span className="text-[10px] font-mono font-normal uppercase bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-500/30">
-                PRO
+
+          <button
+            onClick={() => setIsTrayOpen(true)}
+            title="Security Alert History"
+            className="relative p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors border border-slate-700"
+          >
+            <Bell className="w-4 h-4 text-emerald-400" />
+            {unreadCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white font-mono text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center border border-slate-900 animate-pulse">
+                {unreadCount > 9 ? '9+' : unreadCount}
               </span>
-            </h1>
-            <p className="text-xs text-slate-400 font-sans">Local DLP & Compliance</p>
-          </div>
+            )}
+          </button>
         </div>
 
         <nav className="p-3 space-y-1">

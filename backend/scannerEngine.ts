@@ -350,6 +350,68 @@ export class FileScannerEngine {
     return session;
   }
 
+  public pauseScan(scanId: string): boolean {
+    this.scanAbortControllers.set(scanId, true);
+    const session = this.activeScans.get(scanId);
+    if (session) {
+      session.status = 'PAUSED';
+      session.current_file = undefined;
+    }
+    this.db.prepare("UPDATE scans SET status = 'PAUSED' WHERE scan_id = ?").run(scanId);
+    return true;
+  }
+
+  public async resumeScan(
+    scanId: string,
+    rules: Rule[],
+    settings?: AppSettings,
+    orgId?: string,
+    userId?: string,
+    deviceId?: string
+  ): Promise<ScanSession> {
+    const scanRow = this.db.prepare('SELECT * FROM scans WHERE scan_id = ?').get(scanId) as any;
+    if (!scanRow) {
+      throw new Error(`Scan session '${scanId}' not found`);
+    }
+
+    const pathsArray = scanRow.root_path ? scanRow.root_path.split(', ') : [];
+    
+    // Fetch already processed files from database for this scan_id
+    const completedRows = this.db.prepare(
+      "SELECT path FROM files WHERE scan_id = ? AND scan_status IN ('SUCCESS', 'ERROR', 'SKIPPED')"
+    ).all(scanId) as any[];
+    const completedPaths = new Set<string>(completedRows.map(r => r.path));
+
+    const session: ScanSession = {
+      scan_id: scanId,
+      root_path: scanRow.root_path,
+      start_time: scanRow.start_time,
+      status: 'SCANNING',
+      total_files: scanRow.total_files || 0,
+      supported_files: scanRow.supported_files || 0,
+      processed_files: scanRow.processed_files || completedPaths.size,
+      error_count: scanRow.error_count || 0,
+      critical_count: scanRow.critical_count || 0,
+      high_count: scanRow.high_count || 0,
+      medium_count: scanRow.medium_count || 0,
+      low_count: scanRow.low_count || 0,
+      safe_count: scanRow.safe_count || 0,
+      current_file: 'Resuming scan...'
+    };
+
+    this.activeScans.set(scanId, session);
+    this.scanAbortControllers.set(scanId, false);
+
+    this.db.prepare("UPDATE scans SET status = 'SCANNING' WHERE scan_id = ?").run(scanId);
+
+    // Run resume background task
+    this.runResumeScanTask(scanId, pathsArray, completedPaths, rules, settings, orgId, userId, deviceId).catch(err => {
+      console.error(`[Scan Engine] Fatal error in resumed scan ${scanId}:`, err);
+    });
+
+    return session;
+  }
+
   private async runScanTask(
     scanId: string,
     pathsArray: string[],
@@ -363,11 +425,8 @@ export class FileScannerEngine {
     if (!session) return;
 
     const maxScanDepth = settings?.maxScanDepth ?? 10;
-    const maxFileSizeMB = settings?.maxFileSizeMB ?? 50;
+    const { RESOURCE_LIMITS } = await import('./resourceLimits.js');
 
-    const { RESOURCE_LIMITS, withTimeout } = await import('./resourceLimits.js');
-
-    // Discover files across all paths up to maxScanDepth
     const allDiscovered: string[] = [];
     for (const rp of pathsArray) {
       if (!rp || !rp.trim()) continue;
@@ -387,12 +446,117 @@ export class FileScannerEngine {
       filesToProcess = allDiscovered.slice(0, RESOURCE_LIMITS.maxBatchFiles);
     }
 
+    await this.processFileQueue(scanId, filesToProcess, rules, settings, orgId, userId, deviceId);
+  }
+
+  private async runResumeScanTask(
+    scanId: string,
+    pathsArray: string[],
+    completedPaths: Set<string>,
+    rules: Rule[],
+    settings?: AppSettings,
+    orgId?: string,
+    userId?: string,
+    deviceId?: string
+  ) {
+    const session = this.activeScans.get(scanId);
+    if (!session) return;
+
+    const maxScanDepth = settings?.maxScanDepth ?? 10;
+    const { RESOURCE_LIMITS } = await import('./resourceLimits.js');
+
+    const allDiscovered: string[] = [];
+    for (const rp of pathsArray) {
+      if (!rp || !rp.trim()) continue;
+      const discovered = this.discoverFiles(rp.trim(), maxScanDepth);
+      for (const d of discovered) {
+        if (!allDiscovered.includes(d)) {
+          allDiscovered.push(d);
+        }
+      }
+    }
+
+    session.total_files = Math.max(session.total_files, allDiscovered.length);
+    session.supported_files = session.total_files;
+
+    const remainingFiles = allDiscovered.filter(fp => !completedPaths.has(fp));
+
+    if (remainingFiles.length === 0) {
+      session.status = 'COMPLETED';
+      session.end_time = new Date().toISOString();
+      session.current_file = undefined;
+      this.db.prepare("UPDATE scans SET status = 'COMPLETED', end_time = ? WHERE scan_id = ?").run(session.end_time, scanId);
+      return;
+    }
+
+    let filesToProcess = remainingFiles;
+    if (filesToProcess.length > RESOURCE_LIMITS.maxBatchFiles) {
+      session.status = 'SCAN_LIMIT_EXCEEDED';
+      filesToProcess = filesToProcess.slice(0, RESOURCE_LIMITS.maxBatchFiles);
+    }
+
+    await this.processFileQueue(scanId, filesToProcess, rules, settings, orgId, userId, deviceId);
+  }
+
+  private async processFileQueue(
+    scanId: string,
+    filesToProcess: string[],
+    rules: Rule[],
+    settings?: AppSettings,
+    orgId?: string,
+    userId?: string,
+    deviceId?: string
+  ) {
+    const session = this.activeScans.get(scanId);
+    if (!session) return;
+
+    const maxFileSizeMB = settings?.maxFileSizeMB ?? 50;
+    const { RESOURCE_LIMITS, withTimeout } = await import('./resourceLimits.js');
     const concurrency = RESOURCE_LIMITS.maxConcurrentParsers;
+
+    // Record PENDING files in DB upfront for tracking
+    const checkStmt = this.db.prepare('SELECT file_id FROM files WHERE scan_id = ? AND path = ?');
+    const insertPendingStmt = this.db.prepare(`
+      INSERT INTO files (
+        file_id, scan_id, path, filename, extension, size, sha256,
+        risk_score, classification, scan_status, created_at, modified_at,
+        extracted_text_preview, extracted_text, metadata_json, warnings_json
+      ) VALUES (?, ?, ?, ?, ?, 0, '', 0, 'UNKNOWN', 'PENDING', ?, ?, '', '', '{}', '[]')
+    `);
+
+    for (const filePath of filesToProcess) {
+      const existing = checkStmt.get(scanId, filePath);
+      if (!existing) {
+        const fileId = `FILE-${crypto.randomUUID().substring(0, 8)}`;
+        const now = new Date().toISOString();
+        try {
+          insertPendingStmt.run(
+            fileId,
+            scanId,
+            filePath,
+            path.basename(filePath),
+            path.extname(filePath).toLowerCase(),
+            now,
+            now
+          );
+        } catch (e) {}
+      }
+    }
 
     for (let chunkIdx = 0; chunkIdx < filesToProcess.length; chunkIdx += concurrency) {
       if (this.scanAbortControllers.get(scanId)) {
-        session.status = 'CANCELLED';
-        break;
+        session.status = 'PAUSED';
+        session.current_file = undefined;
+        this.db.prepare(`
+          UPDATE scans SET
+            status = 'PAUSED', processed_files = ?, error_count = ?,
+            critical_count = ?, high_count = ?, medium_count = ?, low_count = ?, safe_count = ?
+          WHERE scan_id = ?
+        `).run(
+          session.processed_files, session.error_count, session.critical_count,
+          session.high_count, session.medium_count, session.low_count, session.safe_count, scanId
+        );
+        return;
       }
 
       const chunk = filesToProcess.slice(chunkIdx, chunkIdx + concurrency);
@@ -401,14 +565,18 @@ export class FileScannerEngine {
         session.current_file = path.basename(filePath);
 
         try {
+          this.db.prepare("UPDATE files SET scan_status = 'PROCESSING' WHERE scan_id = ? AND path = ? AND scan_status = 'PENDING'").run(scanId, filePath);
+        } catch (e) {}
+
+        try {
           const stats = fs.statSync(filePath);
           const sha256 = this.calculateSHA256(filePath);
-          const fileId = `FILE-${crypto.randomUUID().substring(0, 8)}`;
+          const fileRow = this.db.prepare('SELECT file_id FROM files WHERE scan_id = ? AND path = ?').get(scanId, filePath) as any;
+          const fileId = fileRow?.file_id || `FILE-${crypto.randomUUID().substring(0, 8)}`;
 
-          // Check if file size exceeds configured limit before processing
           if (stats.size > maxFileSizeMB * 1024 * 1024) {
             const fileStmt = this.db.prepare(`
-              INSERT INTO files (
+              INSERT OR REPLACE INTO files (
                 file_id, scan_id, path, filename, extension, size, sha256,
                 risk_score, classification, scan_status, created_at, modified_at,
                 extracted_text_preview, extracted_text, metadata_json, warnings_json
@@ -432,7 +600,6 @@ export class FileScannerEngine {
             return;
           }
 
-          // Safe Modular Extraction with Timeout
           let extraction: ExtractionResult;
           let scanStatus: 'SUCCESS' | 'ERROR' | 'SKIPPED' = 'SUCCESS';
 
@@ -462,7 +629,6 @@ export class FileScannerEngine {
             session.error_count++;
           }
 
-          // Evaluate Rules on full extracted text
           const findings = this.evaluateRules(extraction, rules);
           for (const f of findings) {
             f.file_id = fileId;
@@ -470,7 +636,6 @@ export class FileScannerEngine {
 
           let { score: riskScore, classification } = this.calculateRiskScore(findings);
 
-          // Evidence Safety: Incomplete extraction / truncation must not falsely PASS
           if (metadata.truncated || metadata.resourceLimitExceeded || warnings.some(w => w.includes('RESOURCE_LIMIT_EXCEEDED'))) {
             if (classification === 'PUBLIC') {
               classification = 'CONFIDENTIAL';
@@ -478,7 +643,6 @@ export class FileScannerEngine {
             }
           }
 
-          // Track stats counts
           for (const f of findings) {
             if (f.severity === 'CRITICAL') session.critical_count++;
             else if (f.severity === 'HIGH') session.high_count++;
@@ -490,9 +654,8 @@ export class FileScannerEngine {
             session.safe_count++;
           }
 
-          // Insert File Record
           const fileStmt = this.db.prepare(`
-            INSERT INTO files (
+            INSERT OR REPLACE INTO files (
               file_id, scan_id, path, filename, extension, size, sha256,
               risk_score, classification, scan_status, created_at, modified_at,
               extracted_text_preview, extracted_text, metadata_json, warnings_json
@@ -517,7 +680,6 @@ export class FileScannerEngine {
             JSON.stringify(warnings)
           );
 
-          // Insert Findings Records
           const findingStmt = this.db.prepare(`
             INSERT INTO findings (
               finding_id, file_id, rule_id, severity, category, title,
@@ -549,9 +711,28 @@ export class FileScannerEngine {
 
         session.processed_files++;
       }));
+
+      // Update SQLite scan progress after chunk
+      this.db.prepare(`
+        UPDATE scans SET
+          total_files = ?, processed_files = ?, error_count = ?, critical_count = ?,
+          high_count = ?, medium_count = ?, low_count = ?, safe_count = ?
+        WHERE scan_id = ?
+      `).run(
+        session.total_files, session.processed_files, session.error_count,
+        session.critical_count, session.high_count, session.medium_count,
+        session.low_count, session.safe_count, scanId
+      );
     }
 
-    if (session.status !== 'CANCELLED' && session.status !== 'SCAN_LIMIT_EXCEEDED') {
+    if (this.scanAbortControllers.get(scanId)) {
+      session.status = 'PAUSED';
+      session.current_file = undefined;
+      this.db.prepare("UPDATE scans SET status = 'PAUSED' WHERE scan_id = ?").run(scanId);
+      return;
+    }
+
+    if (session.status !== 'CANCELLED' && session.status !== 'SCAN_LIMIT_EXCEEDED' && session.status !== 'PAUSED') {
       try {
         session.current_file = 'Evaluating compliance...';
         const { EvidenceEngine } = await import('./audit/evidenceEngine.js');
@@ -571,7 +752,6 @@ export class FileScannerEngine {
     session.end_time = new Date().toISOString();
     session.current_file = undefined;
 
-    // Update scan summary in database
     const updateStmt = this.db.prepare(`
       UPDATE scans SET
         status = ?, end_time = ?, total_files = ?, supported_files = ?,
@@ -643,6 +823,28 @@ export class FileScannerEngine {
   }
 
   public getScanProgress(scanId: string): ScanSession | undefined {
-    return this.activeScans.get(scanId);
+    const active = this.activeScans.get(scanId);
+    if (active) return active;
+
+    const row = this.db.prepare('SELECT * FROM scans WHERE scan_id = ?').get(scanId) as any;
+    if (!row) return undefined;
+
+    return {
+      scan_id: row.scan_id,
+      root_path: row.root_path,
+      start_time: row.start_time,
+      end_time: row.end_time || undefined,
+      status: row.status as any,
+      total_files: row.total_files || 0,
+      supported_files: row.supported_files || 0,
+      processed_files: row.processed_files || 0,
+      error_count: row.error_count || 0,
+      critical_count: row.critical_count || 0,
+      high_count: row.high_count || 0,
+      medium_count: row.medium_count || 0,
+      low_count: row.low_count || 0,
+      safe_count: row.safe_count || 0,
+      current_file: row.status === 'SCANNING' ? 'Processing...' : undefined
+    };
   }
 }

@@ -28,6 +28,25 @@ export const api = {
     return res.json();
   },
 
+  async triggerScheduledScanNow(): Promise<{ success: boolean; result: any }> {
+    const res = await fetch('/api/settings/scheduler/trigger-now', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to trigger scheduled scan');
+    }
+    return res.json();
+  },
+
+  async getScheduledScanHistory(): Promise<any[]> {
+    const res = await fetch('/api/settings/scheduler/history');
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.history || [];
+  },
+
   async getDashboardStats(): Promise<DashboardStats> {
     const res = await fetch('/api/dashboard/stats');
     return res.json();
@@ -94,6 +113,37 @@ export const api = {
 
   async getScanProgress(scanId: string): Promise<ScanSession> {
     const res = await fetch(`/api/scans/${scanId}/progress`);
+    return res.json();
+  },
+
+  async pauseScan(scanId: string): Promise<{ success: boolean; scan: ScanSession }> {
+    const res = await fetch(`/api/scans/${scanId}/pause`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to pause scan');
+    }
+    return res.json();
+  },
+
+  async resumeScan(scanId: string): Promise<ScanSession> {
+    const res = await fetch(`/api/scans/${scanId}/resume`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to resume scan');
+    }
+    return res.json();
+  },
+
+  async getScanFiles(scanId: string): Promise<FileItem[]> {
+    const res = await fetch(`/api/scans/${scanId}/files`);
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Failed to fetch scan files');
+    }
     return res.json();
   },
 
@@ -499,13 +549,9 @@ export const api = {
     return res.json();
   },
 
-  // --- ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A) ---
+  // --- ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A & B) ---
   async runEndpointAssessment(payload?: {
-    deviceId?: string;
     linkAuditSessionId?: string;
-    mockWindowsUsbData?: any;
-    platformOverride?: string;
-    customWebTargets?: any;
   }): Promise<import('../types').EndpointAssessment> {
     const res = await fetch('/api/endpoint/assess', {
       method: 'POST',
@@ -537,6 +583,20 @@ export const api = {
     const query = deviceId ? `?deviceId=${encodeURIComponent(deviceId)}` : '';
     const res = await fetch(`/api/endpoint/latest${query}`);
     if (!res.ok) return null;
+    return res.json();
+  },
+
+  async getEndpoints(): Promise<import('../types').EndpointRecord[]> {
+    const res = await fetch('/api/endpoint/endpoints');
+    if (!res.ok) return [];
+    return res.json();
+  },
+
+  async getEndpointById(id: string): Promise<import('../types').EndpointRecord> {
+    const res = await fetch(`/api/endpoint/endpoints/${encodeURIComponent(id)}`);
+    if (!res.ok) {
+      throw new Error(`Endpoint ${id} not found`);
+    }
     return res.json();
   },
 

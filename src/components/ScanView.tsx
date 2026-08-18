@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ScanSession } from '../types';
+import { ScanSession, FileItem } from '../types';
 import { api } from '../services/api';
-import { FolderSearch, Play, CheckCircle2, AlertTriangle, ShieldCheck, UploadCloud, Folder, Trash2, CheckSquare, Square } from 'lucide-react';
+import { useToast } from '../context/ToastContext';
+import { 
+  FolderSearch, Play, Pause, RefreshCw, CheckCircle2, AlertTriangle, 
+  ShieldCheck, UploadCloud, Folder, Trash2, CheckSquare, Square, 
+  FileText, Search, Clock, PauseCircle, AlertCircle, CheckCircle, FileCode,
+  RotateCcw
+} from 'lucide-react';
 
 interface ScanViewProps {
   onScanComplete: (scanId: string) => void;
@@ -25,31 +31,131 @@ export const ScanView: React.FC<ScanViewProps> = ({
   activeScan,
   setActiveScan
 }) => {
+  const { showToast } = useToast();
   const [uploadedFolders, setUploadedFolders] = useState<UploadedFolder[]>([]);
   const [isScanning, setIsScanning] = useState(false);
+  const [isPausing, setIsPausing] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  
+  const [scanFiles, setScanFiles] = useState<FileItem[]>([]);
+  const [recentScans, setRecentScans] = useState<ScanSession[]>([]);
+  const [fileFilter, setFileFilter] = useState<'ALL' | 'COMPLETED' | 'PENDING' | 'ERROR'>('ALL');
+  const [fileSearch, setFileSearch] = useState('');
+
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const alertedFilesRef = useRef<Set<string>>(new Set());
+  const alertedCompletionsRef = useRef<Set<string>>(new Set());
+
+  // Load scan history to identify interrupted / paused scans
+  const loadScanHistory = async () => {
+    try {
+      const history = await api.getScanHistory();
+      setRecentScans(history);
+    } catch (e) {
+      console.warn('Failed to fetch scan history', e);
+    }
+  };
 
   useEffect(() => {
+    loadScanHistory();
+  }, []);
+
+  // Poll scan progress and fetch individual file statuses when a scan is active
+  useEffect(() => {
     let timer: any;
-    if (activeScan && activeScan.status === 'SCANNING') {
-      setIsScanning(true);
-      timer = setInterval(async () => {
-        try {
-          const updated = await api.getScanProgress(activeScan.scan_id);
-          setActiveScan(updated);
-          if (updated.status === 'COMPLETED' || updated.status === 'FAILED') {
-            setIsScanning(false);
-            clearInterval(timer);
-            onScanComplete(updated.scan_id);
+    let fileTimer: any;
+
+    const fetchFiles = async (scanId: string) => {
+      try {
+        const files = await api.getScanFiles(scanId);
+        setScanFiles(files);
+
+        // Real-time security violation detection
+        for (const f of files) {
+          if (!alertedFilesRef.current.has(f.file_id)) {
+            const critCount = f.findings_count?.critical || 0;
+            const highCount = f.findings_count?.high || 0;
+            const isErr = f.scan_status === 'ERROR';
+
+            if (critCount > 0 || highCount > 0 || isErr) {
+              alertedFilesRef.current.add(f.file_id);
+              showToast({
+                title: critCount > 0 ? 'CRITICAL SECURITY VIOLATION' : isErr ? 'FILE SCANNING ERROR' : 'HIGH RISK FINDING DETECTED',
+                message: `File "${f.filename}" encountered ${critCount > 0 ? 'Critical PII or API secret violation' : isErr ? 'analyzer execution error' : 'high risk compliance issue'}.`,
+                type: critCount > 0 || isErr ? 'violation' : 'warning',
+                fileId: f.file_id,
+                filePath: f.path,
+                scanId: scanId,
+                actionLabel: 'Inspect File Details'
+              });
+            }
           }
-        } catch (e) {
-          console.error(e);
         }
-      }, 500);
+      } catch (e) {
+        console.warn('Failed to fetch scan files:', e);
+      }
+    };
+
+    if (activeScan) {
+      fetchFiles(activeScan.scan_id);
+
+      if (activeScan.status === 'SCANNING') {
+        setIsScanning(true);
+        timer = setInterval(async () => {
+          try {
+            const updated = await api.getScanProgress(activeScan.scan_id);
+            setActiveScan(updated);
+            if (updated.status === 'COMPLETED' || updated.status === 'FAILED') {
+              setIsScanning(false);
+              clearInterval(timer);
+              clearInterval(fileTimer);
+              fetchFiles(updated.scan_id);
+              loadScanHistory();
+
+              if (!alertedCompletionsRef.current.has(updated.scan_id)) {
+                alertedCompletionsRef.current.add(updated.scan_id);
+                if (updated.status === 'COMPLETED') {
+                  const critCount = updated.critical_count || 0;
+                  const highCount = updated.high_count || 0;
+                  const durationMs = updated.end_time && updated.start_time
+                    ? Math.max(0, new Date(updated.end_time).getTime() - new Date(updated.start_time).getTime())
+                    : 0;
+                  showToast({
+                    title: 'SCAN SESSION COMPLETED SUCCESSFULLY',
+                    message: `Analyzed ${updated.total_files || 0} files${durationMs ? ` in ${durationMs}ms` : ''}. ${critCount} critical violations and ${highCount} high risk findings flagged.`,
+                    type: critCount > 0 ? 'warning' : 'success',
+                    scanId: updated.scan_id,
+                    actionLabel: 'View Audit Compliance Report',
+                    onAction: () => onScanComplete(updated.scan_id)
+                  });
+                  onScanComplete(updated.scan_id);
+                } else if (updated.status === 'FAILED') {
+                  showToast({
+                    title: 'SCAN SESSION TERMINATED WITH ERROR',
+                    message: `Scan execution failed due to an error encountered during analysis.`,
+                    type: 'violation',
+                    scanId: updated.scan_id
+                  });
+                }
+              }
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }, 500);
+
+        fileTimer = setInterval(() => {
+          fetchFiles(activeScan.scan_id);
+        }, 1000);
+      } else {
+        setIsScanning(false);
+      }
     }
-    return () => clearInterval(timer);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      if (fileTimer) clearInterval(fileTimer);
+    };
   }, [activeScan?.scan_id, activeScan?.status]);
 
   const handleStartScan = async () => {
@@ -65,9 +171,73 @@ export const ScanView: React.FC<ScanViewProps> = ({
       const paths = selectedFolders.map(f => f.rootPath);
       const session = await api.startScan(paths);
       setActiveScan(session);
+      setScanFiles([]);
+      showToast({
+        title: 'LONG-RUNNING SCAN INITIATED',
+        message: `Analysis engine initialized across ${paths.length} folder root(s). Listening for real-time compliance findings...`,
+        type: 'info',
+        scanId: session.scan_id
+      });
     } catch (err: any) {
       setIsScanning(false);
       setErrorMsg(err.message || 'Failed to initialize scan engine');
+      showToast({
+        title: 'SCAN INITIATION ERROR',
+        message: err.message || 'Failed to start security scan session',
+        type: 'violation'
+      });
+    }
+  };
+
+  const handlePauseScan = async () => {
+    if (!activeScan) return;
+    try {
+      setErrorMsg(null);
+      setIsPausing(true);
+      const res = await api.pauseScan(activeScan.scan_id);
+      setActiveScan(res.scan);
+      setIsScanning(false);
+      loadScanHistory();
+      showToast({
+        title: 'SCAN SESSION PAUSED',
+        message: `Scan execution checkpoint saved locally. Resume anytime from the Scanner panel.`,
+        type: 'warning',
+        scanId: activeScan.scan_id
+      });
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Failed to pause scan session');
+    } finally {
+      setIsPausing(false);
+    }
+  };
+
+  const handleResumeScan = async (scanIdToResume?: string) => {
+    const targetId = scanIdToResume || activeScan?.scan_id;
+    if (!targetId) return;
+
+    try {
+      setErrorMsg(null);
+      setIsResuming(true);
+      setIsScanning(true);
+      const session = await api.resumeScan(targetId);
+      setActiveScan(session);
+      loadScanHistory();
+      showToast({
+        title: 'SCAN SESSION RESUMED',
+        message: `Resumed scan processing from saved checkpoint. Monitoring file violations in real-time...`,
+        type: 'info',
+        scanId: targetId
+      });
+    } catch (err: any) {
+      setIsScanning(false);
+      setErrorMsg(err.message || 'Failed to resume scan session');
+      showToast({
+        title: 'SCAN RESUME ERROR',
+        message: err.message || 'Failed to resume interrupted scan session',
+        type: 'violation'
+      });
+    } finally {
+      setIsResuming(false);
     }
   };
 
@@ -93,7 +263,6 @@ export const ScanView: React.FC<ScanViewProps> = ({
     setUploadedFolders(prev => [...prev, newFolderItem]);
     setErrorMsg(null);
 
-    // Reset file input value so same folder can be uploaded again if needed
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -132,6 +301,14 @@ export const ScanView: React.FC<ScanViewProps> = ({
     setUploadedFolders(prev => prev.map(f => ({ ...f, selected: select })));
   };
 
+  const formatFileSize = (bytes: number) => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
+
   const progressPercent = activeScan && activeScan.total_files > 0
     ? Math.round((activeScan.processed_files / activeScan.total_files) * 100)
     : 0;
@@ -139,15 +316,34 @@ export const ScanView: React.FC<ScanViewProps> = ({
   const anyUploading = uploadedFolders.some(f => f.status === 'uploading');
   const selectedCompletedCount = uploadedFolders.filter(f => f.selected && f.status === 'completed').length;
 
+  // Filter scan files
+  const filteredFiles = scanFiles.filter(file => {
+    const matchesSearch = !fileSearch || 
+      file.filename.toLowerCase().includes(fileSearch.toLowerCase()) || 
+      file.path.toLowerCase().includes(fileSearch.toLowerCase());
+    
+    if (!matchesSearch) return false;
+
+    if (fileFilter === 'COMPLETED') return file.scan_status === 'SUCCESS';
+    if (fileFilter === 'PENDING') return file.scan_status === 'PENDING' || file.scan_status === 'PROCESSING';
+    if (fileFilter === 'ERROR') return file.scan_status === 'ERROR' || file.scan_status === 'SKIPPED';
+    return true;
+  });
+
+  // Find interrupted / resumable scans from history
+  const resumableScans = recentScans.filter(
+    s => s.status === 'PAUSED' || s.status === 'CANCELLED' || (s.status === 'SCANNING' && s.scan_id !== activeScan?.scan_id) || (s.processed_files < s.total_files && s.status !== 'COMPLETED')
+  );
+
   return (
-    <div className="p-8 max-w-5xl mx-auto space-y-8">
+    <div className="p-8 max-w-6xl mx-auto space-y-8">
       <div>
         <h2 className="text-xl font-bold text-slate-100 flex items-center gap-2">
           <FolderSearch className="w-5 h-5 text-emerald-400" />
-          Target Folder Selection & Scan Execution
+          Target Folder Selection & Resumable Scan Engine
         </h2>
         <p className="text-sm text-slate-400 mt-1">
-          Select multiple folders, upload local directories, and run compliance & security scans.
+          Select target directories, execute scans with real-time file status tracking, and seamlessly resume interrupted scan jobs.
         </p>
       </div>
 
@@ -171,7 +367,6 @@ export const ScanView: React.FC<ScanViewProps> = ({
               <UploadCloud className="w-4 h-4" />
               Upload Local Folder
             </button>
-            {/* hidden directory input supporting multiple selection */}
             <input 
               type="file" 
               ref={fileInputRef} 
@@ -254,7 +449,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
                       </div>
                       <div className="flex items-center gap-3 text-xs text-slate-400 mt-0.5 font-mono">
                         <span className="truncate">{folder.rootPath || 'Preparing path...'}</span>
-                        <span className="text-slate-300 font-semibold flex-shrink-0">• {folder.fileCount} files uploaded successfully</span>
+                        <span className="text-slate-300 font-semibold flex-shrink-0">• {folder.fileCount} files uploaded</span>
                       </div>
 
                       {folder.status === 'uploading' && (
@@ -287,7 +482,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
           </div>
         )}
 
-        {/* ONE SINGLE SCAN NOW BUTTON */}
+        {/* SCAN EXECUTION BUTTON */}
         <div className="pt-4 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="text-xs text-slate-400">
             {selectedCompletedCount > 0 ? (
@@ -309,7 +504,7 @@ export const ScanView: React.FC<ScanViewProps> = ({
 
         {errorMsg && <p className="text-xs text-red-400 mt-2">{errorMsg}</p>}
 
-        {/* Supported Ext List */}
+        {/* Supported Formats */}
         <div className="border-t border-slate-800/80 pt-4 flex flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
           <span className="font-semibold text-slate-300">Supported Formats:</span>
           <div className="flex gap-2">
@@ -322,14 +517,66 @@ export const ScanView: React.FC<ScanViewProps> = ({
         </div>
       </div>
 
+      {/* Interrupted & Resumable Scans Panel */}
+      {resumableScans.length > 0 && (
+        <div className="bg-slate-900 border border-amber-500/30 rounded-xl p-6 space-y-4 shadow-lg shadow-amber-950/10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <RotateCcw className="w-5 h-5 text-amber-400" />
+              <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">
+                Interrupted / Resumable Scan Jobs ({resumableScans.length})
+              </h3>
+            </div>
+            <span className="text-xs text-amber-400/80 font-mono">
+              Database persistence enables zero-loss restart from last saved file
+            </span>
+          </div>
+
+          <div className="space-y-3">
+            {resumableScans.map(s => {
+              const pct = s.total_files > 0 ? Math.round((s.processed_files / s.total_files) * 100) : 0;
+              return (
+                <div key={s.scan_id} className="bg-slate-950 border border-slate-800 p-4 rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                  <div className="space-y-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-emerald-400 font-bold">{s.scan_id}</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold border ${
+                        s.status === 'PAUSED' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-slate-800 text-slate-300 border-slate-700'
+                      }`}>
+                        {s.status}
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 font-mono truncate">{s.root_path}</p>
+                    <p className="text-[11px] text-slate-500 font-mono">
+                      Progress: {s.processed_files} / {s.total_files} files ({pct}%) • Started: {new Date(s.start_time).toLocaleString()}
+                    </p>
+                  </div>
+
+                  <button
+                    onClick={() => handleResumeScan(s.scan_id)}
+                    disabled={isScanning || isResuming}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs px-5 py-2.5 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap self-start md:self-center"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isResuming ? 'animate-spin' : ''}`} />
+                    {isResuming ? 'Resuming...' : 'Resume Scan Job'}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Real-time Scan Progress Section */}
       {activeScan && (
         <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
                 {activeScan.status === 'SCANNING' ? (
                   <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping"></span>
+                ) : activeScan.status === 'PAUSED' ? (
+                  <PauseCircle className="w-5 h-5 text-amber-400" />
                 ) : (
                   <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                 )}
@@ -337,11 +584,39 @@ export const ScanView: React.FC<ScanViewProps> = ({
               </h3>
               <p className="text-xs text-slate-400 mt-1 font-mono">{activeScan.root_path}</p>
             </div>
-            <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold border ${
-              activeScan.status === 'SCANNING' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-            }`}>
-              {activeScan.status}
-            </span>
+
+            <div className="flex items-center gap-3">
+              <span className={`px-3 py-1 rounded-full text-xs font-mono font-bold border ${
+                activeScan.status === 'SCANNING' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                activeScan.status === 'PAUSED' ? 'bg-amber-500/20 text-amber-300 border-amber-500/50' :
+                'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+              }`}>
+                {activeScan.status}
+              </span>
+
+              {/* Pause / Resume Actions */}
+              {activeScan.status === 'SCANNING' && (
+                <button
+                  onClick={handlePauseScan}
+                  disabled={isPausing}
+                  className="bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/40 text-xs px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors disabled:opacity-50"
+                >
+                  <Pause className="w-3.5 h-3.5" />
+                  {isPausing ? 'Pausing...' : 'Pause Scan'}
+                </button>
+              )}
+
+              {(activeScan.status === 'PAUSED' || activeScan.status === 'CANCELLED' || (activeScan.status !== 'SCANNING' && activeScan.processed_files < activeScan.total_files)) && (
+                <button
+                  onClick={() => handleResumeScan()}
+                  disabled={isResuming}
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-500/40 text-xs px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors shadow-sm disabled:opacity-50"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isResuming ? 'animate-spin' : ''}`} />
+                  {isResuming ? 'Resuming...' : 'Resume Scan'}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Progress bar */}
@@ -355,7 +630,9 @@ export const ScanView: React.FC<ScanViewProps> = ({
               </div>
               <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800 p-0.5">
                 <div
-                  className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-300"
+                  className={`h-full rounded-full transition-all duration-300 ${
+                    activeScan.status === 'PAUSED' ? 'bg-amber-500' : 'bg-gradient-to-r from-emerald-600 to-emerald-400'
+                  }`}
                   style={{ width: `${progressPercent}%` }}
                 ></div>
               </div>
@@ -410,6 +687,126 @@ export const ScanView: React.FC<ScanViewProps> = ({
               <div className="text-[10px] text-slate-400 uppercase font-semibold">Errors</div>
               <div className="text-lg font-bold text-slate-400 font-mono">{activeScan.error_count}</div>
             </div>
+          </div>
+
+          {/* Real-time Individual File Status Persistence List */}
+          <div className="space-y-4 pt-4 border-t border-slate-800">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-400" />
+                  Individual File Persistence Status ({scanFiles.length} tracked)
+                </h4>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Every file state is saved in the SQLite database to allow instant resumption.
+                </p>
+              </div>
+
+              {/* Filter Tabs */}
+              <div className="flex items-center gap-1 bg-slate-950 p-1 rounded-lg border border-slate-800 text-xs">
+                {(['ALL', 'COMPLETED', 'PENDING', 'ERROR'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setFileFilter(tab)}
+                    className={`px-3 py-1 rounded font-mono font-medium transition-colors ${
+                      fileFilter === tab ? 'bg-emerald-600 text-white' : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Search Input */}
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-500 absolute left-3 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search tracked file name or path..."
+                value={fileSearch}
+                onChange={e => setFileSearch(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-9 pr-4 py-2 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
+              />
+            </div>
+
+            {/* File List Table */}
+            {filteredFiles.length === 0 ? (
+              <div className="p-6 text-center text-xs text-slate-500 bg-slate-950/40 rounded-xl border border-slate-800/80">
+                {scanFiles.length === 0 ? 'Discovering and saving file records to database...' : 'No files matching current filter/search.'}
+              </div>
+            ) : (
+              <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/60 max-h-80 overflow-y-auto">
+                <table className="w-full text-left text-xs font-mono">
+                  <thead className="bg-slate-900 border-b border-slate-800 text-slate-400 font-semibold sticky top-0">
+                    <tr>
+                      <th className="p-3">File Name & Path</th>
+                      <th className="p-3">Status</th>
+                      <th className="p-3">Size</th>
+                      <th className="p-3">Classification</th>
+                      <th className="p-3">Findings</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60">
+                    {filteredFiles.map(file => (
+                      <tr key={file.file_id || file.path} className="hover:bg-slate-900/50 transition-colors">
+                        <td className="p-3 max-w-xs truncate" title={file.path}>
+                          <div className="font-semibold text-slate-200 truncate">{file.filename}</div>
+                          <div className="text-[11px] text-slate-500 truncate">{file.path}</div>
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          {file.scan_status === 'SUCCESS' && (
+                            <span className="px-2 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold inline-flex items-center gap-1">
+                              <CheckCircle className="w-3 h-3" /> Completed
+                            </span>
+                          )}
+                          {file.scan_status === 'PROCESSING' && (
+                            <span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold inline-flex items-center gap-1 animate-pulse">
+                              <RefreshCw className="w-3 h-3 animate-spin" /> Processing
+                            </span>
+                          )}
+                          {file.scan_status === 'PENDING' && (
+                            <span className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 text-[10px] font-bold inline-flex items-center gap-1">
+                              <Clock className="w-3 h-3" /> Pending
+                            </span>
+                          )}
+                          {file.scan_status === 'ERROR' && (
+                            <span className="px-2 py-0.5 rounded bg-rose-500/10 border border-rose-500/30 text-rose-400 text-[10px] font-bold inline-flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> Error
+                            </span>
+                          )}
+                          {file.scan_status === 'SKIPPED' && (
+                            <span className="px-2 py-0.5 rounded bg-purple-500/10 border border-purple-500/30 text-purple-400 text-[10px] font-bold inline-flex items-center gap-1">
+                              Skipped
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3 text-slate-400 whitespace-nowrap">
+                          {formatFileSize(file.size)}
+                        </td>
+                        <td className="p-3 whitespace-nowrap">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                            file.classification === 'RESTRICTED' ? 'bg-red-500/10 text-red-400 border-red-500/30' :
+                            file.classification === 'CONFIDENTIAL' ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                            file.classification === 'INTERNAL' ? 'bg-blue-500/10 text-blue-400 border-blue-500/30' :
+                            'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                          }`}>
+                            {file.classification}
+                          </span>
+                        </td>
+                        <td className="p-3 text-slate-300 font-semibold whitespace-nowrap">
+                          {file.findings && file.findings.length > 0 ? (
+                            <span className="text-amber-400">{file.findings.length} findings</span>
+                          ) : (
+                            <span className="text-slate-500">0</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -1,0 +1,13 @@
+{
+  "id": "INTERNAL-SECURITY",
+  "version": "1.0.0",
+  "name": "Internal Enterprise Security & Data Governance Baseline",
+  "description": "Baseline technical and procedural controls for internal IT infrastructure, workstation hygiene, and data protection.",
+  "publisher": "FileSentinel Enterprise Security Operations",
+  "minimumEngineVersion": "8.2.0",
+  "controlCount": 4,
+  "categoryWeights": {
+    "ENDPOINT_HYGIENE": 60,
+    "DATA_CLASSIFICATION": 40
+  }
+}

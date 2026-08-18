@@ -7,6 +7,7 @@ import { XLSXExtractor } from './xlsxExtractor.js';
 import { DOCXExtractor } from './docxExtractor.js';
 import { PPTXExtractor } from './pptxExtractor.js';
 import { PDFExtractor } from './pdfExtractor.js';
+import { ImageOcrExtractor } from './imageOcrExtractor.js';
 
 export class ExtractorRegistry {
   private extractors: BaseExtractor[] = [];
@@ -18,7 +19,8 @@ export class ExtractorRegistry {
       new XLSXExtractor(),
       new DOCXExtractor(),
       new PPTXExtractor(),
-      new PDFExtractor()
+      new PDFExtractor(),
+      new ImageOcrExtractor()
     ];
   }
 

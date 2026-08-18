@@ -6,7 +6,7 @@ export type Classification = 'RESTRICTED' | 'CONFIDENTIAL' | 'INTERNAL' | 'PUBLI
 
 export type FindingSource = 'RULE' | 'HEURISTIC' | 'AI';
 
-export type ScanStatus = 'PENDING' | 'SCANNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'SCAN_LIMIT_EXCEEDED';
+export type ScanStatus = 'PENDING' | 'SCANNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED' | 'SCAN_LIMIT_EXCEEDED' | 'PAUSED';
 
 export interface Rule {
   id: string;
@@ -52,7 +52,7 @@ export interface FileItem {
   sha256: string;
   risk_score: number;
   classification: Classification;
-  scan_status: 'SUCCESS' | 'ERROR' | 'SKIPPED';
+  scan_status: 'SUCCESS' | 'ERROR' | 'SKIPPED' | 'PENDING' | 'PROCESSING';
   created_at: string;
   modified_at: string;
   findings_count?: {
@@ -126,6 +126,25 @@ export interface AuditEvent {
   details?: string;
 }
 
+export interface RecurringScanConfig {
+  enabled: boolean;
+  frequency: 'DAILY' | 'WEEKLY' | 'MONTHLY';
+  time: string; // e.g. "02:00"
+  dayOfWeek: number; // 1 = Mon ... 7 = Sun
+  dayOfMonth: number; // 1 .. 31
+  targetPaths: string[];
+  scanTypes: ('SECURITY' | 'SECRETS' | 'PII' | 'DOCUMENT')[];
+  autoQuarantineCritical?: boolean;
+  notifyOnCompletion?: boolean;
+  notificationEmail?: string;
+  generateReportOnComplete?: boolean;
+  lastRunTime?: string;
+  nextRunTime?: string;
+  lastRunStatus?: 'SUCCESS' | 'WARNING' | 'FAILED' | 'NONE';
+  lastRunFilesCount?: number;
+  lastRunFindingsCount?: number;
+}
+
 export interface AppSettings {
   maxFileSizeMB: number;
   maxScanDepth: number;
@@ -139,6 +158,7 @@ export interface AppSettings {
   cloudBucketName: string;
   quarantineLocalDir: string;
   theme?: 'midnight-emerald' | 'cyber-neon' | 'warm-executive' | 'clean-light';
+  recurringScan?: RecurringScanConfig;
 }
 
 export interface DeviceTelemetryInfo {
@@ -522,6 +542,51 @@ export interface RetentionPolicy {
 
 export type EndpointPlatform = 'windows' | 'linux' | 'darwin' | 'unsupported';
 
+export type DeviceType =
+  | 'WINDOWS_ENDPOINT'
+  | 'LINUX_ENDPOINT'
+  | 'MACOS_ENDPOINT'
+  | 'ANDROID_DEVICE'
+  | 'IOS_DEVICE'
+  | 'SERVER'
+  | 'CLOUD_SERVER'
+  | 'UNKNOWN';
+
+export type RuntimeType =
+  | 'LOCAL_WINDOWS_AGENT'
+  | 'LOCAL_LINUX_AGENT'
+  | 'LOCAL_MACOS_AGENT'
+  | 'ANDROID_AGENT'
+  | 'IOS_AGENT'
+  | 'REMOTE_AGENT'
+  | 'CLOUD_SERVER'
+  | 'UNKNOWN';
+
+export type DetectionSource =
+  | 'LOCAL_MACHINE'
+  | 'REMOTE_AGENT'
+  | 'CLOUD_SERVER'
+  | 'UNKNOWN';
+
+export interface AssessmentProvenance {
+  endpointId: string;
+  assessmentId: string;
+  deviceType: DeviceType;
+  hostname: string;
+  platform: string;
+  architecture: string;
+  runtimeType: RuntimeType;
+  detectionSource: DetectionSource;
+  machineUuid: string;
+  agentVersion: string;
+  applicationVersion: string;
+  startedAt: string;
+  completedAt: string;
+  osVersion?: string;
+  runtimeVersion?: string;
+  scannerVersion?: string;
+}
+
 export type DetectionCategory =
   | 'USB_STORAGE'
   | 'SOCIAL_MEDIA'
@@ -585,6 +650,11 @@ export interface USBDetectionResult {
   confidence: ConfidenceLevel;
   timestamp: string;
   platform: string;
+  endpointId?: string;
+  assessmentId?: string;
+  detectionSource?: DetectionSource;
+  runtimeType?: RuntimeType;
+  provenance?: AssessmentProvenance;
   policyDetails?: {
     usbstorServiceStart?: number;
     storageDevicePolicies?: string;
@@ -616,6 +686,11 @@ export interface WebTargetResult {
   reason?: string;
   responseTimeMs?: number;
   timestamp: string;
+  endpointId?: string;
+  assessmentId?: string;
+  detectionSource?: DetectionSource;
+  runtimeType?: RuntimeType;
+  provenance?: AssessmentProvenance;
 }
 
 export interface CategorySummary {
@@ -628,19 +703,67 @@ export interface CategorySummary {
 
 export interface EndpointAssessment {
   id: string;
+  assessment_id?: string;
+  endpoint_id: string;
   org_id: string;
   device_id: string;
   user_id: string;
   timestamp: string;
+  started_at: string;
+  completed_at: string;
   platform: string;
+  device_type: DeviceType;
+  runtime_type: RuntimeType;
+  detection_source: DetectionSource;
+  hostname: string;
+  machine_uuid: string;
   application_version: string;
+  agent_version: string;
   overall_status: AssessmentOverallStatus;
+  evidence_hash: string;
+  provenance: AssessmentProvenance;
   usb_result: USBDetectionResult;
   web_results: WebTargetResult[];
   category_summaries: Record<DetectionCategory, CategorySummary>;
   evidence_text: string;
   created_at: string;
 }
+
+export interface EndpointRecord {
+  endpoint_id: string;
+  org_id: string;
+  device_id: string;
+  hostname: string;
+  platform: string;
+  device_type: DeviceType;
+  runtime_type: RuntimeType;
+  detection_source: DetectionSource;
+  machine_uuid: string;
+  last_assessment_id?: string;
+  last_status?: AssessmentOverallStatus;
+  first_seen_at: string;
+  last_seen_at: string;
+  ip_address?: string;
+  metadata?: string;
+}
+
+export type ToastType = 'success' | 'violation' | 'warning' | 'info';
+
+export interface ToastNotification {
+  id: string;
+  title: string;
+  message: string;
+  type: ToastType;
+  timestamp: string;
+  scanId?: string;
+  fileId?: string;
+  filePath?: string;
+  read?: boolean;
+  actionLabel?: string;
+  onAction?: () => void;
+  duration?: number;
+}
+
 
 
 

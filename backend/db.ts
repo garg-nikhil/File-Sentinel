@@ -223,6 +223,23 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         created_at TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS scheduled_scan_logs (
+        id TEXT PRIMARY KEY,
+        scan_id TEXT,
+        trigger_type TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        duration_ms INTEGER DEFAULT 0,
+        target_paths_json TEXT,
+        total_files INTEGER DEFAULT 0,
+        critical_count INTEGER DEFAULT 0,
+        high_count INTEGER DEFAULT 0,
+        medium_count INTEGER DEFAULT 0,
+        low_count INTEGER DEFAULT 0,
+        status TEXT NOT NULL,
+        summary_message TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS users (
         user_id TEXT PRIMARY KEY,
         org_id TEXT NOT NULL,
@@ -467,15 +484,45 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
         timestamp TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS endpoints (
+        endpoint_id TEXT PRIMARY KEY,
+        org_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        hostname TEXT NOT NULL,
+        machine_uuid TEXT,
+        device_type TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        architecture TEXT NOT NULL,
+        runtime_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ACTIVE',
+        FOREIGN KEY (org_id) REFERENCES organizations(org_id),
+        FOREIGN KEY (device_id) REFERENCES devices(device_id)
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_endpoints_org_device ON endpoints(org_id, device_id);
+
       CREATE TABLE IF NOT EXISTS endpoint_assessments (
         id TEXT PRIMARY KEY,
+        endpoint_id TEXT,
         org_id TEXT NOT NULL,
         device_id TEXT NOT NULL,
         user_id TEXT NOT NULL,
         timestamp TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
         platform TEXT NOT NULL,
+        device_type TEXT,
+        runtime_type TEXT,
+        detection_source TEXT,
+        hostname TEXT,
+        machine_uuid TEXT,
         application_version TEXT NOT NULL,
+        agent_version TEXT,
         overall_status TEXT NOT NULL,
+        evidence_hash TEXT,
+        provenance_json TEXT,
         summary_json TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (org_id) REFERENCES organizations(org_id),
@@ -521,6 +568,50 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       }
       if (!scanCols.some(c => c.name === 'device_id')) {
         db.exec("ALTER TABLE scans ADD COLUMN device_id TEXT;");
+      }
+      if (!scanCols.some(c => c.name === 'endpoint_id')) {
+        db.exec("ALTER TABLE scans ADD COLUMN endpoint_id TEXT;");
+      }
+      if (!scanCols.some(c => c.name === 'detection_source')) {
+        db.exec("ALTER TABLE scans ADD COLUMN detection_source TEXT;");
+      }
+      if (!scanCols.some(c => c.name === 'runtime_type')) {
+        db.exec("ALTER TABLE scans ADD COLUMN runtime_type TEXT;");
+      }
+
+      const epAssessmentCols = db.prepare("PRAGMA table_info(endpoint_assessments)").all() as { name: string }[];
+      if (!epAssessmentCols.some(c => c.name === 'endpoint_id')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN endpoint_id TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'runtime_type')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN runtime_type TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'detection_source')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN detection_source TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'device_type')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN device_type TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'hostname')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN hostname TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'machine_uuid')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN machine_uuid TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'agent_version')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN agent_version TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'started_at')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN started_at TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'completed_at')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN completed_at TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'evidence_hash')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN evidence_hash TEXT;");
+      }
+      if (!epAssessmentCols.some(c => c.name === 'provenance_json')) {
+        db.exec("ALTER TABLE endpoint_assessments ADD COLUMN provenance_json TEXT;");
       }
 
       const orgCols = db.prepare("PRAGMA table_info(organizations)").all() as { name: string }[];

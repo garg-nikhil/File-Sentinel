@@ -1,0 +1,62 @@
+[
+  {
+    "id": "SEC-INT-001",
+    "name": "Disk Encryption & BitLocker State",
+    "category": "ENDPOINT_HYGIENE",
+    "severity": "HIGH",
+    "description": "Verifies that local storage partitions are fully encrypted using BitLocker or AES-256 equivalent.",
+    "domain": "DISK_ENCRYPTION",
+    "evidence_requirements": ["BitLocker Status Log", "Encryption Audit Certificate"],
+    "supported_formats": ["TXT", "CSV", "JSON", "PDF"],
+    "required_fields": ["drive_letter", "protection_status", "encryption_method"],
+    "evaluation_type": "DETERMINISTIC_FIELD_MATCH",
+    "logic": "SINGLE",
+    "fatal": false,
+    "keywords": ["BitLocker", "manage-bde", "Encryption Method", "Protection On", "AES-256"]
+  },
+  {
+    "id": "SEC-INT-002",
+    "name": "Antivirus Definition & Real-Time Protection Active",
+    "category": "ENDPOINT_HYGIENE",
+    "severity": "CRITICAL",
+    "description": "Ensures real-time antivirus / EDR engine is enabled and signatures are updated within 48 hours.",
+    "domain": "ANTIVIRUS_PROTECTION",
+    "evidence_requirements": ["EDR Status Report", "Windows Defender Security Log"],
+    "supported_formats": ["TXT", "JSON", "PDF"],
+    "required_fields": ["product_name", "realtime_protection_enabled", "signature_version", "last_update_date"],
+    "evaluation_type": "DETERMINISTIC_FIELD_MATCH",
+    "logic": "SINGLE",
+    "fatal": true,
+    "keywords": ["Defender", "EDR", "Real-Time Protection", "Signature Update", "AntivirusStatus"]
+  },
+  {
+    "id": "SEC-INT-003",
+    "name": "Sensitive File Classification & DLP Tagging",
+    "category": "DATA_CLASSIFICATION",
+    "severity": "HIGH",
+    "description": "Scans workspace repositories for unclassified sensitive data, cleartext PII, or unlabelled export spreadsheets.",
+    "domain": "PII_CONFIDENTIAL_SCAN",
+    "evidence_requirements": ["PII Detection Findings", "Metadata Scan Report"],
+    "supported_formats": ["PDF", "DOCX", "XLSX", "CSV", "TXT", "JPG", "PNG"],
+    "required_fields": ["file_name", "pii_count", "classification_tier"],
+    "evaluation_type": "DETERMINISTIC_FIELD_MATCH",
+    "logic": "SINGLE",
+    "fatal": false,
+    "keywords": ["CONFIDENTIAL", "RESTRICTED", "Aadhaar", "PAN", "Credit Card", "PII"]
+  },
+  {
+    "id": "SEC-INT-004",
+    "name": "Local Administrator Privilege Restriction",
+    "category": "ENDPOINT_HYGIENE",
+    "severity": "HIGH",
+    "description": "Confirms standard user accounts do not belong to the local Administrators security group.",
+    "domain": "LOCAL_PRIVILEGE_MANAGEMENT",
+    "evidence_requirements": ["Local Administrators group query output", "LAPS Audit Log"],
+    "supported_formats": ["TXT", "CSV", "JSON"],
+    "required_fields": ["group_name", "members"],
+    "evaluation_type": "ACCESS_GROUP_CHECK",
+    "logic": "SINGLE",
+    "fatal": false,
+    "keywords": ["Administrators", "net localgroup", "LAPS", "admin rights", "Privileged Account"]
+  }
+]

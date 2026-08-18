@@ -17,8 +17,10 @@ import { ReportVerificationView } from './components/ReportVerificationView';
 import { AdminConsoleView } from './components/AdminConsoleView';
 import { api } from './services/api';
 import { DashboardStats, ScanSession } from './types';
+import { ToastProvider } from './context/ToastContext';
+import { ToastContainer, NotificationTrayDrawer } from './components/ToastContainer';
 
-export default function App() {
+function MainLayout() {
   const [activeTab, setActiveTab] = useState<NavTab>('dashboard');
   const [selectedFileId, setSelectedFileId] = useState<string | null>(null);
   const [stats, setStats] = useState<DashboardStats | null>(null);
@@ -160,6 +162,21 @@ export default function App() {
           </>
         )}
       </main>
+
+      {/* Real-time Toast Overlay & Notification History Drawer */}
+      <ToastContainer />
+      <NotificationTrayDrawer
+        onNavigateToTab={setActiveTab}
+        onSelectFile={handleSelectFile}
+      />
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <ToastProvider>
+      <MainLayout />
+    </ToastProvider>
   );
 }

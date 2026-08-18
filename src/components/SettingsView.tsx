@@ -23,11 +23,17 @@ import {
   Layers,
   ChevronDown,
   ChevronRight,
-  Info
+  Info,
+  Clock,
+  Calendar,
+  Play,
+  Plus,
+  Mail,
+  Folder
 } from 'lucide-react';
 
 export const SettingsView: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'general' | 'privacy_governance' | 'telemetry_debugger' | 'retention'>('privacy_governance');
+  const [activeTab, setActiveTab] = useState<'privacy_governance' | 'recurring_scan' | 'telemetry_debugger' | 'retention' | 'general'>('privacy_governance');
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState(false);
@@ -120,6 +126,17 @@ export const SettingsView: React.FC = () => {
         >
           <Lock className="w-3.5 h-3.5" />
           Privacy Controls & Classification
+        </button>
+        <button
+          onClick={() => setActiveTab('recurring_scan')}
+          className={`px-4 py-2 text-xs font-semibold rounded-t-lg transition-all flex items-center gap-2 ${
+            activeTab === 'recurring_scan'
+              ? 'bg-slate-800 text-indigo-400 border-t-2 border-indigo-500'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5 text-indigo-400" />
+          Automated Scan Scheduler
         </button>
         <button
           onClick={() => setActiveTab('telemetry_debugger')}
@@ -401,7 +418,12 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: TELEMETRY DEBUGGER / PAYLOAD INSPECTOR */}
+      {/* TAB 2: AUTOMATED RECURRING SCAN SCHEDULER */}
+      {activeTab === 'recurring_scan' && (
+        <RecurringScanSchedulerCard settings={settings} setSettings={setSettings} onSave={handleSave} />
+      )}
+
+      {/* TAB 3: TELEMETRY DEBUGGER / PAYLOAD INSPECTOR */}
       {activeTab === 'telemetry_debugger' && (
         <TelemetryDebuggerCard recentScans={recentScans} />
       )}
@@ -876,6 +898,563 @@ const TelemetryQueueCard: React.FC = () => {
           {syncMsg}
         </div>
       )}
+    </div>
+  );
+};
+
+/* --- AUTOMATED RECURRING SCAN SCHEDULER COMPONENT --- */
+const RecurringScanSchedulerCard: React.FC<{
+  settings: AppSettings;
+  setSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
+  onSave: () => Promise<void>;
+}> = ({ settings, setSettings, onSave }) => {
+  const [history, setHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [triggering, setTriggering] = useState(false);
+  const [newTargetPath, setNewTargetPath] = useState('');
+  const [statusMsg, setStatusMsg] = useState<string | null>(null);
+
+  const config = settings.recurringScan || {
+    enabled: true,
+    frequency: 'DAILY',
+    time: '02:00',
+    dayOfWeek: 1,
+    dayOfMonth: 1,
+    targetPaths: ['./storage_bucket', 'backend/uploads'],
+    scanTypes: ['SECURITY', 'SECRETS', 'PII', 'DOCUMENT'],
+    autoQuarantineCritical: false,
+    notifyOnCompletion: true,
+    notificationEmail: 'compliance-alerts@organization.internal',
+    generateReportOnComplete: true,
+  };
+
+  useEffect(() => {
+    fetchHistory();
+  }, []);
+
+  const fetchHistory = async () => {
+    try {
+      setLoadingHistory(true);
+      const data = await api.getScheduledScanHistory();
+      setHistory(data);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoadingHistory(false);
+    }
+  };
+
+  const updateConfig = (updates: Partial<typeof config>) => {
+    const updated = { ...config, ...updates };
+    setSettings({
+      ...settings,
+      recurringScan: updated
+    });
+  };
+
+  const handleAddTargetPath = (pathToAdd: string) => {
+    const trimmed = pathToAdd.trim();
+    if (!trimmed) return;
+    if (config.targetPaths.includes(trimmed)) return;
+    updateConfig({ targetPaths: [...config.targetPaths, trimmed] });
+    setNewTargetPath('');
+  };
+
+  const handleRemoveTargetPath = (index: number) => {
+    const updated = [...config.targetPaths];
+    updated.splice(index, 1);
+    updateConfig({ targetPaths: updated });
+  };
+
+  const handleToggleScanType = (type: 'SECURITY' | 'SECRETS' | 'PII' | 'DOCUMENT') => {
+    let updated: ('SECURITY' | 'SECRETS' | 'PII' | 'DOCUMENT')[];
+    if (config.scanTypes.includes(type)) {
+      if (config.scanTypes.length === 1) return;
+      updated = config.scanTypes.filter(t => t !== type);
+    } else {
+      updated = [...config.scanTypes, type];
+    }
+    updateConfig({ scanTypes: updated });
+  };
+
+  const handleTriggerNow = async () => {
+    try {
+      setTriggering(true);
+      setStatusMsg(null);
+      const res = await api.triggerScheduledScanNow();
+      setStatusMsg(`Manual test run executed successfully. Scan ID: ${res.result.scan_id}`);
+      fetchHistory();
+      const freshSettings = await api.getSettings();
+      setSettings(freshSettings);
+    } catch (err: any) {
+      setStatusMsg(`Trigger error: ${err.message}`);
+    } finally {
+      setTriggering(false);
+    }
+  };
+
+  const formatNextRun = (nextIso?: string) => {
+    if (!config.enabled) return 'DISABLED';
+    if (!nextIso || nextIso === 'DISABLED') return 'Scheduled for next interval';
+    try {
+      const date = new Date(nextIso);
+      return date.toLocaleString();
+    } catch {
+      return nextIso;
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Executive Master Scheduler Card */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6 shadow-xl">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <Clock className="w-5 h-5 text-indigo-400" />
+              <h2 className="text-base font-bold text-slate-100">Automated Recurring Scan Scheduler</h2>
+              <span className={`px-2.5 py-0.5 text-[10px] font-mono font-bold rounded-full uppercase border ${
+                config.enabled
+                  ? 'bg-emerald-950 text-emerald-300 border-emerald-800'
+                  : 'bg-slate-800 text-slate-400 border-slate-700'
+              }`}>
+                {config.enabled ? '● SCHEDULER ACTIVE' : '○ SCHEDULER PAUSED'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              Configures automated background security, compliance, and PII inspection scans across designated filesystem targets.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => updateConfig({ enabled: !config.enabled })}
+              className={`px-3.5 py-2 rounded-lg text-xs font-bold font-mono transition-all flex items-center gap-2 ${
+                config.enabled
+                  ? 'bg-emerald-950 text-emerald-300 border border-emerald-700 hover:bg-emerald-900'
+                  : 'bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              {config.enabled ? 'Disable Recurring Scans' : 'Enable Recurring Scans'}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTriggerNow}
+              disabled={triggering}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-2 transition-all disabled:opacity-50 shadow-md"
+            >
+              <Play className={`w-3.5 h-3.5 ${triggering ? 'animate-spin' : ''}`} />
+              {triggering ? 'Executing Test Scan...' : 'Run Scheduled Scan Now'}
+            </button>
+
+            <button
+              type="button"
+              onClick={onSave}
+              className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-4 py-2 rounded-lg text-xs flex items-center gap-2 transition-all shadow-md"
+            >
+              <Save className="w-3.5 h-3.5" />
+              Save Scheduler Config
+            </button>
+          </div>
+        </div>
+
+        {/* Status & Next Run Banner */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block mb-1">
+              Next Automated Execution
+            </span>
+            <span className="text-sm font-black font-mono text-indigo-400 flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-indigo-400" />
+              {formatNextRun(config.nextRunTime)}
+            </span>
+          </div>
+
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block mb-1">
+              Last Run Timestamp & Status
+            </span>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-mono text-slate-200">
+                {config.lastRunTime ? new Date(config.lastRunTime).toLocaleString() : 'Never Executed'}
+              </span>
+              <span className={`px-2 py-0.5 text-[10px] font-mono font-bold rounded ${
+                config.lastRunStatus === 'SUCCESS'
+                  ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                  : config.lastRunStatus === 'WARNING'
+                  ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                  : 'bg-slate-800 text-slate-400'
+              }`}>
+                {config.lastRunStatus || 'IDLE'}
+              </span>
+            </div>
+          </div>
+
+          <div className="bg-slate-950 border border-slate-800 rounded-xl p-4">
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block mb-1">
+              Last Scan Metrics
+            </span>
+            <span className="text-xs font-mono text-slate-300 block">
+              <strong className="text-white">{config.lastRunFilesCount ?? 0}</strong> Files Scanned • <strong className="text-amber-400">{config.lastRunFindingsCount ?? 0}</strong> Findings Flashed
+            </span>
+          </div>
+        </div>
+
+        {statusMsg && (
+          <div className="p-3 bg-indigo-950/40 border border-indigo-800/80 rounded-xl text-xs font-mono text-indigo-300 flex items-center justify-between">
+            <span>{statusMsg}</span>
+            <button onClick={() => setStatusMsg(null)} className="text-slate-400 hover:text-white">✕</button>
+          </div>
+        )}
+
+        {/* SECTION 1: RECURRING SCHEDULE & FREQUENCY */}
+        <div className="space-y-4 pt-2">
+          <h3 className="text-xs font-bold text-slate-200 uppercase font-mono tracking-wider flex items-center gap-2">
+            <Clock className="w-4 h-4 text-emerald-400" />
+            1. Automated Execution Frequency & Timing
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {[
+              { id: 'DAILY', title: 'Daily Automated Scan', desc: 'Runs every 24 hours at designated local time' },
+              { id: 'WEEKLY', title: 'Weekly Automated Scan', desc: 'Runs once per week on selected day' },
+              { id: 'MONTHLY', title: 'Monthly Automated Scan', desc: 'Runs once per month on selected calendar date' }
+            ].map(f => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => updateConfig({ frequency: f.id as any })}
+                className={`p-4 rounded-xl border text-left transition-all ${
+                  config.frequency === f.id
+                    ? 'bg-slate-800 border-indigo-500 text-white shadow-lg ring-1 ring-indigo-500/50'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold font-mono text-slate-200">{f.title}</span>
+                  {config.frequency === f.id && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
+                </div>
+                <p className="text-[11px] text-slate-400">{f.desc}</p>
+              </button>
+            ))}
+          </div>
+
+          <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs text-slate-400 mb-1.5 font-semibold">
+                Scheduled Start Time (Local 24-Hour)
+              </label>
+              <select
+                value={config.time || '02:00'}
+                onChange={e => updateConfig({ time: e.target.value })}
+                className="w-full bg-slate-900 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs font-mono outline-none focus:border-indigo-500"
+              >
+                <option value="00:00">00:00 Midnight (Off-peak)</option>
+                <option value="02:00">02:00 AM (Recommended Default)</option>
+                <option value="04:00">04:00 AM (Early Morning)</option>
+                <option value="06:00">06:00 AM</option>
+                <option value="09:00">09:00 AM (Workday Start)</option>
+                <option value="12:00">12:00 PM (Noon)</option>
+                <option value="18:00">18:00 PM (Workday End)</option>
+                <option value="22:00">22:00 PM (Nightly Audit)</option>
+              </select>
+            </div>
+
+            {config.frequency === 'WEEKLY' && (
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5 font-semibold">
+                  Day of Week
+                </label>
+                <div className="flex items-center gap-1.5">
+                  {[
+                    { day: 1, label: 'Mon' },
+                    { day: 2, label: 'Tue' },
+                    { day: 3, label: 'Wed' },
+                    { day: 4, label: 'Thu' },
+                    { day: 5, label: 'Fri' },
+                    { day: 6, label: 'Sat' },
+                    { day: 7, label: 'Sun' }
+                  ].map(d => (
+                    <button
+                      key={d.day}
+                      type="button"
+                      onClick={() => updateConfig({ dayOfWeek: d.day })}
+                      className={`flex-1 py-1.5 text-xs font-mono font-bold rounded border transition-all ${
+                        config.dayOfWeek === d.day
+                          ? 'bg-indigo-600 text-white border-indigo-500'
+                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                      }`}
+                    >
+                      {d.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {config.frequency === 'MONTHLY' && (
+              <div>
+                <label className="block text-xs text-slate-400 mb-1.5 font-semibold">
+                  Day of Month
+                </label>
+                <select
+                  value={config.dayOfMonth || 1}
+                  onChange={e => updateConfig({ dayOfMonth: parseInt(e.target.value) })}
+                  className="w-full bg-slate-900 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs font-mono outline-none focus:border-indigo-500"
+                >
+                  <option value={1}>1st of the Month (Monthly Audit)</option>
+                  <option value={15}>15th of the Month (Mid-month Check)</option>
+                  <option value={28}>28th of the Month (End-of-month Close)</option>
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* SECTION 2: TARGET DIRECTORY PATHS */}
+        <div className="space-y-4 pt-4 border-t border-slate-800">
+          <h3 className="text-xs font-bold text-slate-200 uppercase font-mono tracking-wider flex items-center gap-2">
+            <Folder className="w-4 h-4 text-emerald-400" />
+            2. Target Filesystem Roots & Directory Paths ({config.targetPaths.length} Active Target Paths)
+          </h3>
+
+          <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {config.targetPaths.map((tp, idx) => (
+                <div
+                  key={idx}
+                  className="bg-slate-900 border border-slate-700 text-slate-200 font-mono text-xs px-3 py-1.5 rounded-lg flex items-center gap-2"
+                >
+                  <Folder className="w-3.5 h-3.5 text-amber-400" />
+                  <span>{tp}</span>
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveTargetPath(idx)}
+                    className="text-slate-500 hover:text-rose-400 transition-colors ml-1"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <input
+                type="text"
+                placeholder="Enter relative or absolute path (e.g. /var/data/logs or ./storage_bucket)"
+                value={newTargetPath}
+                onChange={e => setNewTargetPath(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleAddTargetPath(newTargetPath); }}
+                className="flex-1 bg-slate-900 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs font-mono outline-none focus:border-indigo-500"
+              />
+              <button
+                type="button"
+                onClick={() => handleAddTargetPath(newTargetPath)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-2 rounded-lg text-xs font-bold font-mono flex items-center gap-1 transition-all"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add Path
+              </button>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 pt-1">
+              <span className="font-semibold text-slate-300">Quick Target Presets:</span>
+              {[
+                './storage_bucket',
+                'backend/uploads',
+                './storage_bucket/quarantine_staging',
+                '/var/data/compliance'
+              ].map((p, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => handleAddTargetPath(p)}
+                  className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded font-mono text-[10px] text-indigo-300"
+                >
+                  + {p}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* SECTION 3: SCAN FOCUS & DETECTION MODULES */}
+        <div className="space-y-4 pt-4 border-t border-slate-800">
+          <h3 className="text-xs font-bold text-slate-200 uppercase font-mono tracking-wider flex items-center gap-2">
+            <ShieldCheck className="w-4 h-4 text-emerald-400" />
+            3. Scheduled Scan Scope & Detection Focus Modules
+          </h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { id: 'SECURITY', name: 'Security & Audit Rules', desc: 'SOC2, ISO27001, HIPAA, GDPR rulesets' },
+              { id: 'SECRETS', name: 'Secrets & API Keys', desc: 'AWS, Stripe, Private keys, JWT signatures' },
+              { id: 'PII', name: 'PII & Financial Data', desc: 'SSNs, Credit Cards, Medical context' },
+              { id: 'DOCUMENT', name: 'Unencrypted Documents', desc: 'Confidential PDFs, Office Docs, Archives' }
+            ].map(mod => {
+              const active = config.scanTypes.includes(mod.id as any);
+              return (
+                <button
+                  key={mod.id}
+                  type="button"
+                  onClick={() => handleToggleScanType(mod.id as any)}
+                  className={`p-3.5 rounded-xl border text-left transition-all ${
+                    active
+                      ? 'bg-slate-800/80 border-emerald-500 text-white'
+                      : 'bg-slate-950 border-slate-800 text-slate-500 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs font-bold font-mono text-slate-200">{mod.name}</span>
+                    <div className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold ${
+                      active ? 'bg-emerald-500 text-slate-950' : 'border border-slate-700 text-transparent'
+                    }`}>
+                      ✓
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-slate-400">{mod.desc}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* SECTION 4: AUTOMATED REMEDIATION & ALERTS */}
+        <div className="space-y-4 pt-4 border-t border-slate-800">
+          <h3 className="text-xs font-bold text-slate-200 uppercase font-mono tracking-wider flex items-center gap-2">
+            <Mail className="w-4 h-4 text-emerald-400" />
+            4. Automated Remediations & Post-Scan Notifications
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-xs font-bold text-slate-200 block">Auto-Quarantine Critical Findings</span>
+                  <span className="text-[11px] text-slate-400">Move critical risk items immediately to local quarantine staging.</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={config.autoQuarantineCritical ?? false}
+                  onChange={e => updateConfig({ autoQuarantineCritical: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                />
+              </div>
+              <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+                <div>
+                  <span className="text-xs font-bold text-slate-200 block">Generate Executive PDF Report</span>
+                  <span className="text-[11px] text-slate-400">Automatically assemble printable compliance summary upon completion.</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={config.generateReportOnComplete ?? true}
+                  onChange={e => updateConfig({ generateReportOnComplete: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                />
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-950 border border-slate-800 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-200 block">Email & Webhook Scan Summary Alert</span>
+                <input
+                  type="checkbox"
+                  checked={config.notifyOnCompletion ?? true}
+                  onChange={e => updateConfig({ notifyOnCompletion: e.target.checked })}
+                  className="w-4 h-4 accent-emerald-500 rounded cursor-pointer"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-400 mb-1 font-mono">Notification Recipient Email</label>
+                <input
+                  type="email"
+                  value={config.notificationEmail || ''}
+                  onChange={e => updateConfig({ notificationEmail: e.target.value })}
+                  placeholder="security-alerts@organization.com"
+                  className="w-full bg-slate-900 border border-slate-700 text-slate-100 rounded-lg p-2 text-xs font-mono outline-none focus:border-indigo-500"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 5: SCHEDULED SCAN EXECUTION HISTORY LOG */}
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+              <Terminal className="w-4 h-4 text-indigo-400" />
+              Scheduled Scan Execution History Logs ({history.length} Runs Logged)
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Audit log of automated background scans executed by the engine ticker or manual test triggers.
+            </p>
+          </div>
+          <button
+            onClick={fetchHistory}
+            disabled={loadingHistory}
+            className="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 px-3 py-1.5 rounded-lg text-xs font-mono flex items-center gap-1.5 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loadingHistory ? 'animate-spin' : ''}`} /> Refresh Logs
+          </button>
+        </div>
+
+        {history.length === 0 ? (
+          <div className="p-8 text-center bg-slate-950 rounded-xl border border-slate-800 text-xs text-slate-500 font-mono">
+            No scheduled scan runs logged yet. Click "Run Scheduled Scan Now" above to launch a manual test run.
+          </div>
+        ) : (
+          <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="bg-slate-900/80 border-b border-slate-800 text-slate-400 font-bold uppercase text-[10px]">
+                <tr>
+                  <th className="p-3">Run ID</th>
+                  <th className="p-3">Trigger Type</th>
+                  <th className="p-3">Started At</th>
+                  <th className="p-3">Duration</th>
+                  <th className="p-3">Files</th>
+                  <th className="p-3">Critical / High</th>
+                  <th className="p-3">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60 text-slate-300">
+                {history.map((h, idx) => (
+                  <tr key={idx} className="hover:bg-slate-900/40">
+                    <td className="p-3 text-indigo-400 font-bold">{h.id}</td>
+                    <td className="p-3">
+                      <span className="px-2 py-0.5 bg-slate-900 border border-slate-800 rounded text-[10px]">
+                        {h.trigger_type}
+                      </span>
+                    </td>
+                    <td className="p-3 text-slate-400">
+                      {new Date(h.started_at).toLocaleString()}
+                    </td>
+                    <td className="p-3 text-slate-400">{h.duration_ms} ms</td>
+                    <td className="p-3 font-bold text-white">{h.total_files}</td>
+                    <td className="p-3">
+                      <span className="text-amber-400 font-bold">{h.critical_count}</span> / <span className="text-yellow-400">{h.high_count}</span>
+                    </td>
+                    <td className="p-3">
+                      {h.status === 'SUCCESS' ? (
+                        <span className="px-2 py-0.5 bg-emerald-950 text-emerald-400 font-bold text-[10px] rounded border border-emerald-800">
+                          ✓ SUCCESS
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 bg-amber-950 text-amber-400 font-bold text-[10px] rounded border border-amber-800">
+                          ⚠️ WARNING
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

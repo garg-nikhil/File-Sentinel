@@ -1,0 +1,13 @@
+{
+  "id": "RBI-VENDOR-2026",
+  "version": "1.0.0",
+  "name": "RBI Master Direction for Vendor IT Governance 2026",
+  "description": "Reserve Bank of India regulatory compliance checklist for outsourced technology service providers and business correspondents.",
+  "publisher": "Reserve Bank of India - Cyber Security & Governance",
+  "minimumEngineVersion": "8.2.0",
+  "controlCount": 6,
+  "categoryWeights": {
+    "REGULATORY_COMPLIANCE": 100,
+    "OPERATIONAL_RESILIENCE": 80
+  }
+}

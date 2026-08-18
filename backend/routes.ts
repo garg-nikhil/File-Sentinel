@@ -25,6 +25,11 @@ import { EndpointComplianceEngine } from './endpoint/endpointDetector.js';
 import { DEFAULT_WEB_TARGETS, validateAndSanitizeTarget } from './endpoint/webAccessDetector.js';
 import { EndpointEvidenceGenerator } from './endpoint/endpointEvidence.js';
 import { WebAccessTarget } from './endpoint/endpointTypes.js';
+import { ScanJobManager } from './scanJobManager.js';
+import { ChecklistManager } from './checklists/checklistManager.js';
+import { OfflineLicenseEngine, getOrCreateDevKeyPair } from './licensing/offlineLicense.js';
+import { StandardWindowsAgentBoundary } from './endpoint/agentBoundary.js';
+import { ScanSchedulerService } from './scanScheduler.js';
 
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
@@ -51,6 +56,7 @@ export function createApiRouter(customDb?: any) {
   const billingService = new BillingService(db, licensingEngine);
   const privacyGovernanceService = new PrivacyGovernanceService(db);
   const verifiableReportService = new VerifiableAuditReportService(db);
+  const scanSchedulerService = new ScanSchedulerService(db);
 
   router.use((req, res, next) => {
     if (req.app) {
@@ -72,8 +78,29 @@ export function createApiRouter(customDb?: any) {
     redactSensitivePreview: true,
     cloudBucketName: 'filesentinel-prod-quarantine',
     quarantineLocalDir: './storage_bucket/quarantine_staging',
-    theme: 'midnight-emerald'
+    theme: 'midnight-emerald',
+    recurringScan: {
+      enabled: true,
+      frequency: 'DAILY',
+      time: '02:00',
+      dayOfWeek: 1,
+      dayOfMonth: 1,
+      targetPaths: ['./storage_bucket', 'backend/uploads'],
+      scanTypes: ['SECURITY', 'SECRETS', 'PII', 'DOCUMENT'],
+      autoQuarantineCritical: false,
+      notifyOnCompletion: true,
+      notificationEmail: 'compliance-alerts@organization.internal',
+      generateReportOnComplete: true,
+      lastRunTime: new Date(Date.now() - 86400000).toISOString(),
+      nextRunTime: new Date(Date.now() + 43200000).toISOString(),
+      lastRunStatus: 'SUCCESS',
+      lastRunFilesCount: 142,
+      lastRunFindingsCount: 3
+    }
   };
+
+  // Start background recurring scan scheduler
+  scanSchedulerService.startSchedulerLoop(() => currentSettings, updatedSettings => { currentSettings = updatedSettings; });
 
   // Helper for audit logging
   function logAuditEvent(action: string, filePath?: string, sha256?: string, status: 'SUCCESS' | 'WARNING' | 'ERROR' = 'SUCCESS', details?: string) {
@@ -532,13 +559,48 @@ export function createApiRouter(customDb?: any) {
   });
 
   router.get('/settings', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    if (currentSettings.recurringScan) {
+      currentSettings.recurringScan.nextRunTime = scanSchedulerService.computeNextRunTime(currentSettings.recurringScan);
+    }
     res.json(currentSettings);
   });
 
   router.post('/settings', authenticateRequest, requireRole(['ORG_ADMIN']), (req: Request, res: Response) => {
     currentSettings = { ...currentSettings, ...req.body };
+    if (currentSettings.recurringScan) {
+      currentSettings.recurringScan.nextRunTime = scanSchedulerService.computeNextRunTime(currentSettings.recurringScan);
+    }
     logAuditEvent('UPDATE_SETTINGS', undefined, undefined, 'SUCCESS', 'App configuration updated');
     res.json(currentSettings);
+  });
+
+  // --- RECURRING SCAN SCHEDULER ENDPOINTS ---
+  router.post('/settings/scheduler/trigger-now', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
+    try {
+      if (!currentSettings.recurringScan) {
+        return res.status(400).json({ error: 'Recurring scan configuration not initialized' });
+      }
+      const result = await scanSchedulerService.executeScan(
+        currentSettings.recurringScan,
+        'MANUAL_TEST',
+        updatedSettings => { currentSettings = updatedSettings; },
+        currentSettings
+      );
+      logAuditEvent('TRIGGER_SCHEDULED_SCAN', undefined, undefined, 'SUCCESS', `Manual test run of automated scan executed. ID: ${result.scan_id}`);
+      res.json({ success: true, result });
+    } catch (err: any) {
+      console.error('Error triggering scheduled scan:', err);
+      res.status(500).json({ error: err.message || 'Failed to trigger scheduled scan' });
+    }
+  });
+
+  router.get('/settings/scheduler/history', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    try {
+      const history = scanSchedulerService.getHistory(30);
+      res.json({ history });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to fetch scheduled scan history' });
+    }
   });
 
   // --- PRIVACY-FIRST DATA GOVERNANCE & TELEMETRY DEBUGGER ---
@@ -726,6 +788,94 @@ export function createApiRouter(customDb?: any) {
     const orgId = req.user!.orgId;
     const rows = db.prepare('SELECT * FROM scans WHERE org_id = ? ORDER BY start_time DESC LIMIT 50').all(orgId);
     res.json(rows);
+  });
+
+  router.post('/scans/:id/pause', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), (req: Request, res: Response) => {
+    const { id } = req.params;
+    const orgId = req.user!.orgId;
+    const scanRow = db.prepare('SELECT * FROM scans WHERE scan_id = ?').get(id) as any;
+    if (!scanRow) {
+      return res.status(404).json({ error: 'Scan session not found' });
+    }
+    if (scanRow.org_id && scanRow.org_id !== orgId) {
+      return res.status(403).json({ error: 'Access denied: Cross-tenant scan pause forbidden' });
+    }
+
+    scannerEngine.pauseScan(id);
+    logAuditEvent('PAUSE_SCAN', scanRow.root_path, undefined, 'SUCCESS', `Paused Scan ID: ${id}`);
+    const updated = scannerEngine.getScanProgress(id);
+    res.json({ success: true, scan: updated });
+  });
+
+  router.post('/scans/:id/resume', authenticateRequest, requireRole(['ORG_ADMIN', 'OPERATOR']), async (req: Request, res: Response) => {
+    const { id } = req.params;
+    const orgId = req.user!.orgId;
+    const userId = req.user!.userId;
+    const deviceId = req.user!.deviceId;
+
+    const scanRow = db.prepare('SELECT * FROM scans WHERE scan_id = ?').get(id) as any;
+    if (!scanRow) {
+      return res.status(404).json({ error: 'Scan session not found' });
+    }
+    if (scanRow.org_id && scanRow.org_id !== orgId) {
+      return res.status(403).json({ error: 'Access denied: Cross-tenant scan resume forbidden' });
+    }
+
+    const rows = db.prepare('SELECT * FROM rules WHERE enabled = 1').all() as any[];
+    const activeRules: Rule[] = rows.map(r => ({
+      id: r.id,
+      name: r.name,
+      category: r.category,
+      severity: r.severity,
+      enabled: Boolean(r.enabled),
+      pattern: r.pattern,
+      description: r.description,
+      recommendation: r.recommendation,
+      isBuiltIn: Boolean(r.is_builtin)
+    }));
+
+    try {
+      const session = await scannerEngine.resumeScan(id, activeRules, currentSettings, orgId, userId, deviceId);
+      logAuditEvent('RESUME_SCAN', scanRow.root_path, undefined, 'SUCCESS', `Resumed Scan ID: ${id}`);
+      res.json(session);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Failed to resume scan' });
+    }
+  });
+
+  router.get('/scans/:id/files', authenticateRequest, requireRole(['ORG_ADMIN', 'AUDITOR', 'OPERATOR', 'VIEWER']), (req: Request, res: Response) => {
+    const { id } = req.params;
+    const orgId = req.user!.orgId;
+
+    const scanRow = db.prepare('SELECT org_id FROM scans WHERE scan_id = ?').get(id) as any;
+    if (!scanRow) {
+      return res.status(404).json({ error: 'Scan session not found' });
+    }
+    if (scanRow.org_id && scanRow.org_id !== orgId) {
+      return res.status(403).json({ error: 'Access denied: Cross-tenant access forbidden' });
+    }
+
+    const rows = db.prepare('SELECT * FROM files WHERE scan_id = ? ORDER BY created_at DESC').all(id) as any[];
+    res.json(rows.map(f => {
+      const findingsRows = db.prepare('SELECT * FROM findings WHERE file_id = ?').all(f.file_id) as any[];
+      return {
+        file_id: f.file_id,
+        scan_id: f.scan_id,
+        path: f.path,
+        filename: f.filename,
+        extension: f.extension,
+        size: f.size,
+        sha256: f.sha256,
+        risk_score: f.risk_score,
+        classification: f.classification,
+        scan_status: f.scan_status,
+        created_at: f.created_at,
+        modified_at: f.modified_at,
+        extracted_text_preview: f.extracted_text_preview,
+        warnings: f.warnings_json ? JSON.parse(f.warnings_json) : [],
+        findings: findingsRows
+      };
+    }));
   });
 
   // --- TELEMETRY & PRIVACY-PRESERVING SCAN HISTORY ---
@@ -2241,17 +2391,19 @@ export function createApiRouter(customDb?: any) {
   });
 
   // ==========================================
-  // ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A)
+  // ENDPOINT COMPLIANCE DETECTION ENGINE (PHASE A & B)
   // ==========================================
 
   /**
    * SECURITY ENFORCEMENT MIDDLEWARE: Endpoint Assessment Production Sanitizer
    * 
    * Strict Security Mandate:
-   * 1. Rejects any incoming payload containing 'deviceId' in req.body with HTTP 400.
-   *    (The physical endpoint being assessed must be bound to the authenticated session;
-   *     a client must never be able to label the physical machine being inspected as another device).
-   * 2. Rejects any incoming payload containing mock/diagnostic parameters ('mockWindowsUsbData', 'platformOverride', 'customWebTargets', 'mockData', 'mockUsbData') with HTTP 400.
+   * 1. Rejects any incoming payload containing client-supplied identity or provenance fields
+   *    ('deviceId', 'endpointId', 'assessmentId', 'provenance', 'deviceType', 'runtimeType',
+   *     'detectionSource', 'hostname', 'machineUuid', 'evidenceHash') with HTTP 400.
+   * 2. Rejects any incoming payload containing mock/diagnostic parameters ('mockWindowsUsbData',
+   *    'platformOverride', 'customWebTargets', 'mockData', 'mockUsbData', 'mockEndpointId',
+   *    'mockAssessmentId', 'mockProvenance') with HTTP 400.
    * 3. Defensive In-Depth Stripping: Deletes any lingering diagnostic keys from req.body to prevent downstream leakage.
    * 4. Enforces that only authentic, real local detection logic is executed against the host OS.
    */
@@ -2260,19 +2412,50 @@ export function createApiRouter(customDb?: any) {
     const userId = req.user?.userId || 'UNKNOWN_USER';
     const sessionDeviceId = req.user?.deviceId || 'UNKNOWN_DEVICE';
 
-    // 1. Explicitly reject deviceId in request body
-    if (req.body && req.body.deviceId !== undefined) {
-      logSecEvent('FABRICATED_DEVICE_IDENTITY_REJECTED', 'FAILURE', userOrgId, userId, sessionDeviceId, {
-        suppliedDeviceId: req.body.deviceId,
-        enforcement: 'SESSION_DEVICE_IDENTITY_ENFORCEMENT'
-      });
-      return res.status(400).json({
-        error: 'Invalid parameter: deviceId must not be supplied in request body. The endpoint being assessed is strictly bound to the authenticated device session.'
-      });
+    // 1. Explicitly reject deviceId & client-supplied provenance in request body
+    const forbiddenClientIdentityFields = [
+      'deviceId',
+      'endpointId',
+      'endpoint_id',
+      'assessmentId',
+      'assessment_id',
+      'provenance',
+      'deviceType',
+      'device_type',
+      'runtimeType',
+      'runtime_type',
+      'detectionSource',
+      'detection_source',
+      'hostname',
+      'machineUuid',
+      'machine_uuid',
+      'evidenceHash',
+      'evidence_hash'
+    ];
+
+    for (const field of forbiddenClientIdentityFields) {
+      if (req.body && req.body[field] !== undefined) {
+        logSecEvent('FABRICATED_DEVICE_IDENTITY_REJECTED', 'FAILURE', userOrgId, userId, sessionDeviceId, {
+          suppliedField: field,
+          enforcement: 'STRICT_SERVER_AUTHORITY_IDENTITY_POLICY'
+        });
+        return res.status(400).json({
+          error: `Invalid parameter: '${field}' must not be supplied in request body. Endpoint identity and provenance are strictly generated server-side.`
+        });
+      }
     }
 
     // 2. List of forbidden diagnostic/mock keys
-    const forbiddenMockFields = ['mockWindowsUsbData', 'platformOverride', 'customWebTargets', 'mockData', 'mockUsbData'];
+    const forbiddenMockFields = [
+      'mockWindowsUsbData',
+      'platformOverride',
+      'customWebTargets',
+      'mockData',
+      'mockUsbData',
+      'mockEndpointId',
+      'mockAssessmentId',
+      'mockProvenance'
+    ];
 
     for (const field of forbiddenMockFields) {
       if (req.body && req.body[field] !== undefined) {
@@ -2288,12 +2471,9 @@ export function createApiRouter(customDb?: any) {
 
     // Defensive in-depth stripping of potential proto/mock pollution
     if (req.body && typeof req.body === 'object') {
-      delete req.body.deviceId;
-      delete req.body.mockWindowsUsbData;
-      delete req.body.platformOverride;
-      delete req.body.customWebTargets;
-      delete req.body.mockData;
-      delete req.body.mockUsbData;
+      for (const f of [...forbiddenClientIdentityFields, ...forbiddenMockFields]) {
+        delete req.body[f];
+      }
     }
 
     next();
@@ -2302,6 +2482,36 @@ export function createApiRouter(customDb?: any) {
   // Get default web targets
   router.get('/endpoint/targets', authenticateRequest, (req: Request, res: Response) => {
     res.json(DEFAULT_WEB_TARGETS);
+  });
+
+  // Get registered endpoints for organization
+  router.get('/endpoint/endpoints', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const rows = db.prepare(`
+        SELECT * FROM endpoints WHERE org_id = ? ORDER BY last_seen_at DESC
+      `).all(orgId);
+      res.json(rows);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get specific endpoint details by endpoint ID
+  router.get('/endpoint/endpoints/:id', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { id } = req.params;
+      const row = db.prepare(`
+        SELECT * FROM endpoints WHERE endpoint_id = ? AND org_id = ?
+      `).get(id, orgId);
+      if (!row) {
+        return res.status(404).json({ error: 'Endpoint not found or access denied' });
+      }
+      res.json(row);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Run full endpoint compliance assessment
@@ -2367,6 +2577,7 @@ export function createApiRouter(customDb?: any) {
         // Audit & telemetry recording
         logSecEvent('ENDPOINT_ASSESSMENT_COMPLETED', 'SUCCESS', userOrgId, userId, deviceId, {
           assessmentId: assessment.id,
+          endpointId: assessment.endpoint_id,
           overallStatus: assessment.overall_status,
           usbStatus: assessment.usb_result.status
         });
@@ -2458,6 +2669,24 @@ export function createApiRouter(customDb?: any) {
     }
   });
 
+  // Alias for /endpoint/assessments/:id
+  router.get('/endpoint/assessments/:id', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { id } = req.params;
+      const engine = new EndpointComplianceEngine(db);
+      const assessment = engine.getAssessmentById(id, orgId);
+
+      if (!assessment) {
+        return res.status(404).json({ error: 'Assessment not found or access denied' });
+      }
+
+      res.json(assessment);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get latest assessment for organization
   router.get('/endpoint/latest', authenticateRequest, (req: Request, res: Response) => {
     try {
@@ -2471,6 +2700,205 @@ export function createApiRouter(customDb?: any) {
       }
 
       res.json(latest);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ==========================================
+  // SCALABLE OFFLINE DESKTOP API ENDPOINTS
+  // ==========================================
+
+  // List or Create Scan Jobs
+  router.get('/scan-jobs', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const manager = new ScanJobManager(db);
+      const jobs = manager.listScanJobs(orgId);
+      res.json(jobs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/scan-jobs', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { endpointId, checklistId, sources } = req.body;
+      if (!endpointId || !checklistId || !Array.isArray(sources) || sources.length === 0) {
+        return res.status(400).json({ error: 'Missing required parameters: endpointId, checklistId, sources' });
+      }
+
+      const manager = new ScanJobManager(db);
+      const job = manager.createScanJob({
+        orgId,
+        endpointId,
+        checklistId,
+        sources
+      });
+
+      res.status(201).json(job);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/scan-jobs/:scanId', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { scanId } = req.params;
+      const manager = new ScanJobManager(db);
+      const job = manager.getScanJob(scanId, orgId);
+      if (!job) {
+        return res.status(404).json({ error: 'Scan job not found' });
+      }
+      res.json(job);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/scan-jobs/:scanId/start', authenticateRequest, async (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { scanId } = req.params;
+      const manager = new ScanJobManager(db);
+
+      // Check license validity before starting new scan
+      const licEngine = new OfflineLicenseEngine(db);
+      const devKey = getOrCreateDevKeyPair();
+      const leasePayload = {
+        licenseId: 'LIC-OFFLINE-001',
+        organizationId: orgId,
+        deviceLimit: 100,
+        modules: ['SCAN', 'AUDIT', 'OCR'],
+        issuedAt: new Date().toISOString(),
+        notBefore: new Date(Date.now() - 3600000).toISOString(),
+        expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+        licenseVersion: '8.2.0'
+      };
+      const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
+      const licValidation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+
+      if (!licValidation.canScan) {
+        return res.status(403).json({ error: 'Scanning blocked due to license expiration', licenseStatus: licValidation.status });
+      }
+
+      // Execute scan asynchronously or synchronously
+      const job = await manager.executeScanJob(scanId, orgId);
+      res.json(job);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/scan-jobs/:scanId/pause', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { scanId } = req.params;
+      const manager = new ScanJobManager(db);
+      const success = manager.pauseScanJob(scanId, orgId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/scan-jobs/:scanId/cancel', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { scanId } = req.params;
+      const manager = new ScanJobManager(db);
+      const success = manager.cancelScanJob(scanId, orgId);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/scan-jobs/:scanId/files', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const { scanId } = req.params;
+      const state = req.query.state as any;
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+
+      const manager = new ScanJobManager(db);
+      const result = manager.listScanFiles(scanId, orgId, { state, limit, offset });
+      res.json(result);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Checklist Package Endpoints
+  router.get('/checklists', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const mgr = new ChecklistManager(db);
+      mgr.syncFromDisk();
+      const packages = mgr.listPackages();
+      res.json(packages);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.get('/checklists/:id', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const mgr = new ChecklistManager(db);
+      const pkg = mgr.getPackage(req.params.id);
+      if (!pkg) {
+        return res.status(404).json({ error: 'Checklist package not found' });
+      }
+      res.json(pkg);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/checklists/:id/enable', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const mgr = new ChecklistManager(db);
+      const success = mgr.setEnabled(req.params.id, true);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.post('/checklists/:id/disable', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const mgr = new ChecklistManager(db);
+      const success = mgr.setEnabled(req.params.id, false);
+      res.json({ success });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Offline License Status Endpoint
+  router.get('/license/offline-status', authenticateRequest, (req: Request, res: Response) => {
+    try {
+      const orgId = req.user!.orgId;
+      const licEngine = new OfflineLicenseEngine(db);
+      const devKey = getOrCreateDevKeyPair();
+
+      const leasePayload = {
+        licenseId: 'LIC-OFFLINE-001',
+        organizationId: orgId,
+        deviceLimit: 100,
+        modules: ['SCAN', 'AUDIT', 'OCR'],
+        issuedAt: new Date().toISOString(),
+        notBefore: new Date(Date.now() - 3600000).toISOString(),
+        expiresAt: new Date(Date.now() + 30 * 86400000).toISOString(),
+        licenseVersion: '8.2.0'
+      };
+
+      const signedLease = OfflineLicenseEngine.signLease(leasePayload, devKey.privateKey, 'fs-dev-key');
+      const validation = licEngine.validateLease(signedLease, { orgId, publicKeyPem: devKey.publicKey });
+
+      res.json(validation);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }

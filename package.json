@@ -9,7 +9,7 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test": "tsx tests/test_suite.ts && tsx tests/audit_test_suite.ts && tsx tests/phase_8_2_suite.ts && tsx tests/evidence_hardening_test_suite.ts && tsx tests/entity_resolution_test_suite.ts && tsx tests/date_remediation_test_suite.ts && tsx tests/compound_evidence_test_suite.ts && tsx tests/remediation_verification_suite.ts && tsx tests/domain_isolation_test_suite.ts && tsx tests/remediation_8_1_test_suite.ts && tsx tests/golden-audit/golden-audit-test.ts && tsx tests/cloud_upload_phase6a_test.ts && tsx tests/symlink_security_test.ts && tsx tests/resource_exhaustion_test.ts && tsx tests/http_security_test.ts && tsx tests/no_local_deletion_regression_test.ts && tsx tests/cloud_integrity_hardening_test.ts && tsx tests/evidence_explainability_hardening_test.ts && tsx tests/commercial_phase1_test.ts && tsx tests/commercial_phase2_licensing_test.ts && tsx tests/commercial_phase3_telemetry_test.ts && tsx tests/commercial_phase4_dashboard_test.ts && tsx tests/commercial_phase5_billing_test.ts && tsx tests/commercial_phase7_security_test.ts && tsx tests/tenant_isolation_security_test.ts && tsx tests/endpoint_compliance_test_suite.ts && tsx tests/endpoint_security_test.ts",
+    "test": "tsx tests/test_suite.ts && tsx tests/audit_test_suite.ts && tsx tests/phase_8_2_suite.ts && tsx tests/evidence_hardening_test_suite.ts && tsx tests/entity_resolution_test_suite.ts && tsx tests/date_remediation_test_suite.ts && tsx tests/compound_evidence_test_suite.ts && tsx tests/remediation_verification_suite.ts && tsx tests/domain_isolation_test_suite.ts && tsx tests/remediation_8_1_test_suite.ts && tsx tests/golden-audit/golden-audit-test.ts && tsx tests/cloud_upload_phase6a_test.ts && tsx tests/symlink_security_test.ts && tsx tests/resource_exhaustion_test.ts && tsx tests/http_security_test.ts && tsx tests/no_local_deletion_regression_test.ts && tsx tests/cloud_integrity_hardening_test.ts && tsx tests/evidence_explainability_hardening_test.ts && tsx tests/commercial_phase1_test.ts && tsx tests/commercial_phase2_licensing_test.ts && tsx tests/commercial_phase3_telemetry_test.ts && tsx tests/commercial_phase4_dashboard_test.ts && tsx tests/commercial_phase5_billing_test.ts && tsx tests/commercial_phase7_security_test.ts && tsx tests/tenant_isolation_security_test.ts && tsx tests/endpoint_compliance_test_suite.ts && tsx tests/endpoint_security_test.ts && tsx tests/desktop_scalable_offline_suite.ts && tsx tests/commercial_hardening_adversarial_suite.ts",
     "test:gcs": "tsx tests/live_gcs_test.ts"
   },
   "dependencies": {
@@ -31,6 +31,7 @@
     "pdf-parse": "^2.4.5",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
+    "tesseract.js": "^7.0.0",
     "vite": "^6.2.3",
     "xlsx": "^0.18.5"
   },

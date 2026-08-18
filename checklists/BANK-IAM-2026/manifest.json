@@ -1,0 +1,14 @@
+{
+  "id": "BANK-IAM-2026",
+  "version": "1.0.0",
+  "name": "Banking Identity & Access Governance Checklist 2026",
+  "description": "Comprehensive RBI and Indian Banking compliance framework for Identity, Access Management, Segregation, and Zero-Tolerance controls.",
+  "publisher": "FileSentinel Regulatory Assurance Group",
+  "minimumEngineVersion": "8.2.0",
+  "controlCount": 10,
+  "categoryWeights": {
+    "ZERO_TOLERANCE": 100,
+    "ACCESS_GOVERNANCE": 50,
+    "DATA_PROTECTION": 50
+  }
+}

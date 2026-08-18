@@ -15,12 +15,24 @@ import { EvidenceItem } from '../audit/models.js';
 
 export interface AggregateAssessmentInput {
   id?: string;
+  assessment_id?: string;
+  endpoint_id?: string;
   org_id: string;
   device_id: string;
   user_id: string;
   timestamp?: string;
+  started_at?: string;
+  completed_at?: string;
   platform?: string;
+  device_type?: any;
+  runtime_type?: any;
+  detection_source?: any;
+  hostname?: string;
+  machine_uuid?: string;
   application_version?: string;
+  agent_version?: string;
+  evidence_hash?: string;
+  provenance?: any;
   usb_result: USBDetectionResult;
   web_results: WebTargetResult[];
 }
@@ -30,10 +42,36 @@ export class EndpointEvidenceGenerator {
    * Aggregate detection results into a structured EndpointAssessment report
    */
   public static aggregateAssessment(input: AggregateAssessmentInput): EndpointAssessment {
-    const id = input.id || `ea-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    const timestamp = input.timestamp || new Date().toISOString();
+    const id = input.id || input.assessment_id || `FS-ASMT-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
+    const endpoint_id = input.endpoint_id || `FS-EP-${Math.random().toString(36).substring(2, 10).toUpperCase()}`;
+    const timestamp = input.timestamp || input.started_at || new Date().toISOString();
+    const started_at = input.started_at || timestamp;
+    const completed_at = input.completed_at || new Date().toISOString();
     const platform = input.platform || input.usb_result.platform || 'windows';
-    const application_version = input.application_version || '1.0.0-phaseA';
+    const application_version = input.application_version || '8.2.0-PhaseA';
+    const agent_version = input.agent_version || '1.0.0';
+    const device_type = input.device_type || (platform === 'windows' ? 'WINDOWS_ENDPOINT' : platform === 'linux' ? 'LINUX_ENDPOINT' : platform === 'darwin' ? 'MACOS_ENDPOINT' : 'UNKNOWN');
+    const runtime_type = input.runtime_type || (platform === 'windows' ? 'LOCAL_WINDOWS_AGENT' : platform === 'linux' ? 'LOCAL_LINUX_AGENT' : platform === 'darwin' ? 'LOCAL_MACOS_AGENT' : 'UNKNOWN');
+    const detection_source = input.detection_source || 'LOCAL_MACHINE';
+    const hostname = input.hostname || 'UNKNOWN';
+    const machine_uuid = input.machine_uuid || 'UNKNOWN';
+    const evidence_hash = input.evidence_hash || 'SHA256: 0000000000000000000000000000000000000000000000000000000000000000';
+
+    const provenance = input.provenance || {
+      endpointId: endpoint_id,
+      assessmentId: id,
+      deviceType: device_type,
+      hostname,
+      platform,
+      architecture: 'x64',
+      runtimeType: runtime_type,
+      detectionSource: detection_source,
+      machineUuid: machine_uuid,
+      agentVersion: agent_version,
+      applicationVersion: application_version,
+      startedAt: started_at,
+      completedAt: completed_at
+    };
 
     // Calculate category summaries
     const category_summaries: Record<DetectionCategory, CategorySummary> = {
@@ -64,7 +102,6 @@ export class EndpointEvidenceGenerator {
     }
 
     // Determine overall compliance status
-    // Compliant = USB disabled AND (all web categories blocked or 0 accessible)
     let totalAccessible = 0;
     let totalIndeterminate = 0;
 
@@ -89,11 +126,22 @@ export class EndpointEvidenceGenerator {
 
     const assessmentContext = {
       id,
+      endpoint_id,
       org_id: input.org_id,
       device_id: input.device_id,
       timestamp,
+      started_at,
+      completed_at,
       platform,
+      device_type,
+      runtime_type,
+      detection_source,
+      hostname,
+      machine_uuid,
       application_version,
+      agent_version,
+      evidence_hash,
+      provenance,
       usb_result: input.usb_result,
       web_results: input.web_results,
       category_summaries
@@ -103,30 +151,54 @@ export class EndpointEvidenceGenerator {
 
     return {
       id,
+      assessment_id: id,
+      endpoint_id,
       org_id: input.org_id,
       device_id: input.device_id,
       user_id: input.user_id,
       timestamp,
+      started_at,
+      completed_at,
       platform,
+      device_type,
+      runtime_type,
+      detection_source,
+      hostname,
+      machine_uuid,
       application_version,
+      agent_version,
       overall_status,
+      evidence_hash,
+      provenance,
       usb_result: input.usb_result,
       web_results: input.web_results,
       category_summaries,
       evidence_text,
-      created_at: timestamp
+      created_at: completed_at
     };
   }
+
   /**
    * Generate human-readable, deterministic audit evidence text
    */
   public static generateEvidenceText(assessment: {
     id: string;
+    endpoint_id?: string;
     org_id: string;
     device_id: string;
     timestamp: string;
+    started_at?: string;
+    completed_at?: string;
     platform: string;
+    device_type?: string;
+    runtime_type?: string;
+    detection_source?: string;
+    hostname?: string;
+    machine_uuid?: string;
     application_version: string;
+    agent_version?: string;
+    evidence_hash?: string;
+    provenance?: any;
     usb_result: USBDetectionResult;
     web_results: WebTargetResult[];
     category_summaries: Record<DetectionCategory, CategorySummary>;
@@ -136,12 +208,18 @@ export class EndpointEvidenceGenerator {
     lines.push('============================================================');
     lines.push('       FILESENTINEL ENDPOINT COMPLIANCE ASSESSMENT         ');
     lines.push('============================================================');
-    lines.push(`Assessment ID:       ${assessment.id}`);
+    lines.push(`Endpoint ID:         ${assessment.endpoint_id || assessment.provenance?.endpointId || 'FS-EP-UNKNOWN'}`);
+    lines.push(`Assessment ID:       ${assessment.id || assessment.provenance?.assessmentId}`);
     lines.push(`Organization ID:     ${assessment.org_id}`);
     lines.push(`Device Identifier:   ${assessment.device_id}`);
-    lines.push(`Assessment Time:     ${assessment.timestamp}`);
+    lines.push(`Hostname:            ${assessment.hostname || assessment.provenance?.hostname || 'UNKNOWN'}`);
+    lines.push(`Device Type:         ${assessment.device_type || assessment.provenance?.deviceType || 'WINDOWS_ENDPOINT'}`);
     lines.push(`Target Platform:     ${assessment.platform}`);
+    lines.push(`Detection Source:    ${assessment.detection_source || assessment.provenance?.detectionSource || 'LOCAL_MACHINE'}`);
+    lines.push(`Runtime Type:        ${assessment.runtime_type || assessment.provenance?.runtimeType || 'LOCAL_WINDOWS_AGENT'}`);
+    lines.push(`Assessment Time:     ${assessment.timestamp}`);
     lines.push(`Engine Version:      ${assessment.application_version}`);
+    lines.push(`Evidence Hash:       ${assessment.evidence_hash || 'SHA256-PENDING'}`);
     lines.push('');
 
     // --- USB STORAGE ---
@@ -190,6 +268,7 @@ export class EndpointEvidenceGenerator {
 
     lines.push('============================================================');
     lines.push('EVIDENCE INTEGRITY: DETERMINISTIC LIVE ENDPOINT TELEMETRY');
+    lines.push(`HASH: ${assessment.evidence_hash || 'SHA256-PENDING'}`);
     lines.push('============================================================');
 
     return lines.join('\n');
@@ -200,7 +279,6 @@ export class EndpointEvidenceGenerator {
    */
   public static toAuditEvidenceItems(assessment: EndpointAssessment): EvidenceItem[] {
     const items: EvidenceItem[] = [];
-    const timestamp = assessment.timestamp;
 
     // 1. Evidence for ZTI-008 (USB Storage & Cloud Storage Technical Restriction)
     const isUsbRestricted = assessment.usb_result.status === 'DISABLED';
@@ -210,6 +288,11 @@ export class EndpointEvidenceGenerator {
     const zti008Content = `
 [TECHNICAL_IMPLEMENTATION_DUMP]
 Endpoint Compliance Assessment: ${assessment.id}
+Endpoint ID: ${assessment.endpoint_id || assessment.provenance?.endpointId || 'FS-EP-UNKNOWN'}
+Assessment ID: ${assessment.id}
+Detection Source: ${assessment.detection_source || assessment.provenance?.detectionSource || 'LOCAL_MACHINE'}
+Runtime Type: ${assessment.runtime_type || assessment.provenance?.runtimeType || 'LOCAL_WINDOWS_AGENT'}
+Evidence Hash: ${assessment.evidence_hash || 'SHA256-PENDING'}
 Device: ${assessment.device_id}
 Platform: ${assessment.platform}
 USB_STORAGE_STATUS: ${assessment.usb_result.status}
@@ -233,7 +316,7 @@ STATUS: ${isUsbRestricted && isCloudRestricted ? 'COMPLIANT' : 'AUDIT_REVIEW'}
       evidence_type: 'DLP_GPO_CONFIGURATION_EXPORT',
       semantic_intent: 'TECHNICAL_CONFIG',
       text_preview: zti008Content,
-      validation_reason: `Live endpoint compliance telemetry for USB and Cloud Storage: USB ${assessment.usb_result.status}, Cloud ${cloudSummary?.blocked ?? 0} blocked.`,
+      validation_reason: `Live endpoint compliance telemetry for USB and Cloud Storage: USB ${assessment.usb_result.status}, Cloud ${cloudSummary?.blocked ?? 0} blocked on endpoint ${assessment.endpoint_id || 'UNKNOWN'}.`,
       mandatory_fields_present: ['USB_STORAGE_STATUS', 'REGISTRY_KEY', 'DEVICE_ID']
     });
 
@@ -245,6 +328,11 @@ STATUS: ${isUsbRestricted && isCloudRestricted ? 'COMPLIANT' : 'AUDIT_REVIEW'}
     const zti009Content = `
 [FIREWALL_PROXY_CONFIGURATION_EXPORT]
 Endpoint Compliance Assessment: ${assessment.id}
+Endpoint ID: ${assessment.endpoint_id || assessment.provenance?.endpointId || 'FS-EP-UNKNOWN'}
+Assessment ID: ${assessment.id}
+Detection Source: ${assessment.detection_source || assessment.provenance?.detectionSource || 'LOCAL_MACHINE'}
+Runtime Type: ${assessment.runtime_type || assessment.provenance?.runtimeType || 'LOCAL_WINDOWS_AGENT'}
+Evidence Hash: ${assessment.evidence_hash || 'SHA256-PENDING'}
 Device: ${assessment.device_id}
 Platform: ${assessment.platform}
 SOCIAL_MEDIA_BLOCKED: ${socSummary?.blocked ?? 0} / ${socSummary?.total ?? 0}
@@ -265,7 +353,7 @@ EVIDENCE_TYPE: FIREWALL_PROXY_CONFIGURATION_EXPORT
       evidence_type: 'FIREWALL_PROXY_CONFIGURATION_EXPORT',
       semantic_intent: 'TECHNICAL_CONFIG',
       text_preview: zti009Content,
-      validation_reason: `Live endpoint web access filtering verification: Social ${socSummary?.blocked ?? 0}/${socSummary?.total ?? 0} blocked, Email ${emlSummary?.blocked ?? 0}/${emlSummary?.total ?? 0} blocked, Messaging ${msgSummary?.blocked ?? 0}/${msgSummary?.total ?? 0} blocked.`,
+      validation_reason: `Live endpoint web access filtering verification on endpoint ${assessment.endpoint_id || 'UNKNOWN'}: Social ${socSummary?.blocked ?? 0}/${socSummary?.total ?? 0} blocked, Email ${emlSummary?.blocked ?? 0}/${emlSummary?.total ?? 0} blocked, Messaging ${msgSummary?.blocked ?? 0}/${msgSummary?.total ?? 0} blocked.`,
       mandatory_fields_present: ['URL_FILTERING_RULE_EXPORT', 'FIREWALL_BLOCK_RULE']
     });
 
