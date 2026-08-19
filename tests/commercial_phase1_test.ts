@@ -7,7 +7,6 @@ import request from 'supertest';
 import { createApiRouter } from '../backend/routes.js';
 
 async function runPhase1Tests() {
-  process.env.FILE_SENTINEL_DEV_MODE = 'true';
   console.log('================================================================');
   console.log('   FileSentinel Commercialization Phase 1: Identity & Tenant Test ');
   console.log('================================================================');

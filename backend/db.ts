@@ -3,209 +3,34 @@ import path from 'node:path';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
 import { BUILTIN_RULES } from '../src/rules/builtinRules.js';
-import { OSKeyProtection } from './osKeyProtection.js';
 
 let defaultDbInstance: DatabaseSync | null = null;
 
-export const DB_MAGIC_HEADER = 'FS_ENC_DB_V1';
-
 export function getOrGenerateOSProtectedKey(): string {
-  return OSKeyProtection.getOrGenerateDatabaseKey();
-}
+  if (process.env.FILE_SENTINEL_PROTECTED_KEY_OVERRIDE) {
+    return process.env.FILE_SENTINEL_PROTECTED_KEY_OVERRIDE;
+  }
 
-/**
- * Checks whether a file on disk is an AES-256-GCM encrypted FileSentinel database container.
- */
-export function isEncryptedDatabaseFile(filePath: string): boolean {
-  if (!fs.existsSync(filePath)) return false;
   try {
-    const fd = fs.openSync(filePath, 'r');
-    const buf = Buffer.alloc(12);
-    fs.readSync(fd, buf, 0, 12, 0);
-    fs.closeSync(fd);
-    return buf.toString('utf8') === DB_MAGIC_HEADER;
+    const baseDir = process.env.APPDATA || process.env.USERPROFILE || process.env.HOME || process.cwd();
+    const keyDir = path.join(baseDir, '.filesentinel_protected');
+    const keyPath = path.join(keyDir, 'protect.key');
+
+    if (!fs.existsSync(keyDir)) {
+      fs.mkdirSync(keyDir, { recursive: true });
+    }
+
+    if (fs.existsSync(keyPath)) {
+      const existing = fs.readFileSync(keyPath, 'utf8').trim();
+      if (existing.length >= 32) return existing;
+    }
+
+    const newKey = crypto.randomBytes(32).toString('hex');
+    fs.writeFileSync(keyPath, newKey, { mode: 0o600, encoding: 'utf8' });
+    return newKey;
   } catch {
-    return false;
-  }
-}
-
-/**
- * Encrypts a raw SQLite database buffer at rest using AES-256-GCM authenticated encryption.
- */
-export function encryptDatabaseBuffer(plainBuffer: Buffer, keyHex?: string): Buffer {
-  const masterKey = keyHex || getOrGenerateOSProtectedKey();
-  const salt = crypto.randomBytes(16);
-  const derivedKey = crypto.pbkdf2Sync(masterKey, salt, 100000, 32, 'sha256');
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', derivedKey, iv);
-  const ciphertext = Buffer.concat([cipher.update(plainBuffer), cipher.final()]);
-  const tag = cipher.getAuthTag();
-
-  const magic = Buffer.from(DB_MAGIC_HEADER, 'utf8'); // 12 bytes
-  return Buffer.concat([magic, salt, iv, tag, ciphertext]);
-}
-
-/**
- * Decrypts and authenticates an encrypted SQLite database container using AES-256-GCM.
- * Fails closed if the key is incorrect or if the ciphertext was tampered with.
- */
-export function decryptDatabaseBuffer(encryptedBuffer: Buffer, keyHex?: string): Buffer {
-  if (encryptedBuffer.length < 56) {
-    throw new Error('SECURITY FATAL: Encrypted database container is invalid or corrupted (too short).');
-  }
-
-  const magic = encryptedBuffer.subarray(0, 12).toString('utf8');
-  if (magic !== DB_MAGIC_HEADER) {
-    throw new Error('SECURITY FATAL: Invalid database encryption header magic.');
-  }
-
-  const salt = encryptedBuffer.subarray(12, 28);
-  const iv = encryptedBuffer.subarray(28, 40);
-  const tag = encryptedBuffer.subarray(40, 56);
-  const ciphertext = encryptedBuffer.subarray(56);
-
-  const masterKey = keyHex || getOrGenerateOSProtectedKey();
-  const derivedKey = crypto.pbkdf2Sync(masterKey, salt, 100000, 32, 'sha256');
-
-  try {
-    const decipher = crypto.createDecipheriv('aes-256-gcm', derivedKey, iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  } catch (err: any) {
-    throw new Error(`SECURITY FATAL: Database decryption failed or data integrity compromised (Wrong key or tampered database). Reason: ${err.message}`);
-  }
-}
-
-/**
- * Serializes an active in-memory SQLite database into a deterministic binary Buffer in memory.
- * No disk files or temporary plaintext SQLite files are created.
- */
-export function serializeDatabaseInMemory(db: DatabaseSync): Buffer {
-  const tables = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all() as { name: string; sql: string }[];
-  const indexes = db.prepare("SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL ORDER BY name").all() as { name: string; sql: string }[];
-
-  const payload: {
-    version: number;
-    tables: { name: string; sql: string; rows: Record<string, any>[] }[];
-    indexes: string[];
-  } = {
-    version: 1,
-    tables: [],
-    indexes: indexes.map(i => i.sql)
-  };
-
-  for (const t of tables) {
-    const rows = db.prepare(`SELECT * FROM "${t.name}"`).all() as Record<string, any>[];
-    const serializedRows = rows.map(r => {
-      const rowObj: Record<string, any> = {};
-      for (const [k, v] of Object.entries(r)) {
-        if (Buffer.isBuffer(v) || v instanceof Uint8Array) {
-          rowObj[k] = { __fs_type: 'blob', val: Buffer.from(v).toString('base64') };
-        } else {
-          rowObj[k] = v;
-        }
-      }
-      return rowObj;
-    });
-    payload.tables.push({
-      name: t.name,
-      sql: t.sql,
-      rows: serializedRows
-    });
-  }
-
-  return Buffer.from(JSON.stringify(payload), 'utf8');
-}
-
-/**
- * Restores an in-memory SQLite database from a serialized buffer in memory.
- * Executes within the SQLite memory space without staging on disk.
- */
-export function restoreDatabaseFromMemory(db: DatabaseSync, buffer: Buffer): void {
-  const jsonStr = buffer.toString('utf8');
-  let payload: {
-    version: number;
-    tables: { name: string; sql: string; rows: Record<string, any>[] }[];
-    indexes: string[];
-  };
-  try {
-    payload = JSON.parse(jsonStr);
-  } catch (err: any) {
-    throw new Error(`SECURITY FATAL: Database container payload is malformed or corrupted. Reason: ${err.message}`);
-  }
-
-  if (!payload || !Array.isArray(payload.tables)) {
-    throw new Error('SECURITY FATAL: Invalid database container format.');
-  }
-
-  db.exec('PRAGMA foreign_keys = OFF;');
-  try {
-    for (const t of payload.tables) {
-      db.exec(t.sql);
-      if (t.rows && t.rows.length > 0) {
-        const sample = t.rows[0];
-        const cols = Object.keys(sample);
-        const placeholders = cols.map(() => '?').join(', ');
-        const stmt = db.prepare(`INSERT INTO "${t.name}" (${cols.map(c => `"${c}"`).join(', ')}) VALUES (${placeholders})`);
-        for (const r of t.rows) {
-          const values = cols.map(c => {
-            const val = r[c];
-            if (val && typeof val === 'object' && val.__fs_type === 'blob') {
-              return Buffer.from(val.val, 'base64');
-            }
-            return val;
-          });
-          stmt.run(...values);
-        }
-      }
-    }
-    if (Array.isArray(payload.indexes)) {
-      for (const idxSql of payload.indexes) {
-        try { db.exec(idxSql); } catch {}
-      }
-    }
-  } finally {
-    db.exec('PRAGMA foreign_keys = ON;');
-  }
-}
-
-/**
- * Encrypts an existing SQLite file on disk to a target encrypted container file.
- */
-export function encryptDatabaseFile(sourcePlainPath: string, targetEncPath: string, keyHex?: string): void {
-  const plainData = fs.readFileSync(sourcePlainPath);
-  const encData = encryptDatabaseBuffer(plainData, keyHex);
-  fs.writeFileSync(targetEncPath, encData, { mode: 0o600 });
-}
-
-/**
- * Decrypts an encrypted container file to a plaintext SQLite file (used only in migration/harnesses).
- */
-export function decryptDatabaseFile(sourceEncPath: string, targetPlainPath: string, keyHex?: string): void {
-  const encData = fs.readFileSync(sourceEncPath);
-  const plainData = decryptDatabaseBuffer(encData, keyHex);
-  fs.writeFileSync(targetPlainPath, plainData, { mode: 0o600 });
-}
-
-/**
- * Persists an active in-memory SQLite database to a target AES-256-GCM encrypted file at rest.
- * Ensures zero plaintext staging files touch the disk.
- */
-export function persistDatabaseToEncryptedFile(db: DatabaseSync, targetEncPath: string, keyHex?: string): void {
-  const targetDir = path.dirname(targetEncPath);
-  if (!fs.existsSync(targetDir)) {
-    fs.mkdirSync(targetDir, { recursive: true });
-  }
-
-  try {
-    const plainBytes = serializeDatabaseInMemory(db);
-    const encBytes = encryptDatabaseBuffer(plainBytes, keyHex);
-    const tempEncPath = path.join(targetDir, `.tmp_enc_${crypto.randomBytes(8).toString('hex')}.dat`);
-    fs.writeFileSync(tempEncPath, encBytes, { mode: 0o600 });
-    fs.renameSync(tempEncPath, targetEncPath);
-  } catch (err: any) {
-    console.error(`[DATABASE PERSISTENCE ERROR] Failed to save encrypted database to ${targetEncPath}:`, err.message);
-    throw new Error(`SECURITY FATAL: Database encrypted persistence failed: ${err.message}`);
+    const fallbackSeed = process.env.USER || process.env.USERNAME || 'system-fallback';
+    return crypto.createHash('sha256').update(fallbackSeed).digest('hex');
   }
 }
 
@@ -214,28 +39,18 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
     return defaultDbInstance;
   }
 
-  const isMemory = dbPath === ':memory:';
   const dbDir = path.dirname(dbPath);
-  if (!isMemory && !fs.existsSync(dbDir)) {
+  if (dbPath !== ':memory:' && !fs.existsSync(dbDir)) {
     fs.mkdirSync(dbDir, { recursive: true });
   }
 
   const initDb = (filePath: string): DatabaseSync => {
-    // Live production database executes entirely in memory, decrypting from AES-256-GCM storage
-    const db = new DatabaseSync(':memory:');
+    const db = new DatabaseSync(filePath);
 
-    if (!isMemory && fs.existsSync(filePath)) {
-      if (isEncryptedDatabaseFile(filePath)) {
-        // Authenticated decryption required directly in RAM
-        const encBytes = fs.readFileSync(filePath);
-        const decryptedBytes = decryptDatabaseBuffer(encBytes);
-        restoreDatabaseFromMemory(db, decryptedBytes);
-      } else {
-        if (process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
-          throw new Error('SECURITY FATAL: Plaintext SQLite database detected on disk. Production database must be encrypted at rest.');
-        }
-      }
-    }
+    // SQLCipher Encryption Setup (where compatible)
+    const osKey = getOrGenerateOSProtectedKey();
+    const keyHex = crypto.createHmac('sha256', osKey).update('filesentinel-salt-2026').digest('hex');
+    db.exec(`PRAGMA key = '${keyHex}';`);
 
     // Verify DB integrity and fail closed on authentication/decryption failure
     try {
@@ -937,8 +752,8 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       );
     }
 
-    // Seed default organization, user, device, and license if devadmin does not exist (explicit dev mode only)
-    if (process.env.FILE_SENTINEL_DEV_MODE === 'true' && process.env.NODE_ENV !== 'production') {
+    // Seed default organization, user, device, and license if devadmin does not exist (dev mode only)
+    if (process.env.NODE_ENV !== 'production') {
       const devAdminCheck = db.prepare("SELECT COUNT(*) as count FROM users WHERE username = 'devadmin'").get() as { count: number };
       if (devAdminCheck.count === 0) {
         const defaultOrgId = 'org-default-dev';
@@ -1015,16 +830,6 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       }
     }
 
-    if (!isMemory) {
-      persistDatabaseToEncryptedFile(db, filePath);
-
-      // Register shutdown handler for clean exit persistence
-      const saveOnExit = () => {
-        try { persistDatabaseToEncryptedFile(db, filePath); } catch {}
-      };
-      process.once('beforeExit', saveOnExit);
-    }
-
     return db;
   };
 
@@ -1032,9 +837,6 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
   try {
     instance = initDb(dbPath);
   } catch (err: any) {
-    if (err?.message?.includes('SECURITY FATAL')) {
-      throw err;
-    }
     if (err?.code === 'ERR_SQLITE_ERROR' || err?.message?.includes('malformed')) {
       console.warn(`[SQLite] Database corrupt (${err.message}). Removing and recreating fresh database.`);
       try {

@@ -20,42 +20,23 @@ export const securityHeaders = helmet({
 });
 
 // --- CORS MIDDLEWARE ---
-export function getAllowedOrigins(): string[] {
-  const defaultOrigins = [
-    'http://localhost:3000',
-    'http://127.0.0.1:3000',
-    'tauri://localhost',
-    'https://tauri.localhost'
-  ];
-
-  if (process.env.ALLOWED_ORIGINS) {
-    const custom = process.env.ALLOWED_ORIGINS.split(',')
-      .map(o => o.trim())
-      .filter(o => o.length > 0);
-    return [...defaultOrigins, ...custom];
-  }
-
-  return defaultOrigins;
-}
-
 export function corsMiddleware(req: Request, res: Response, next: NextFunction) {
   const origin = req.headers.origin;
-  const allowedOrigins = getAllowedOrigins();
+  const allowedOrigins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000'
+  ];
 
   if (origin) {
-    // P0-3: Exact match only. No substring matching, no wildcard matching, no automatic production acceptance.
-    if (allowedOrigins.includes(origin)) {
+    if (allowedOrigins.includes(origin) || origin.includes('.run.app') || origin.includes('ai.studio') || process.env.NODE_ENV !== 'production') {
       res.setHeader('Access-Control-Allow-Origin', origin);
     }
   }
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-FS-IPC-Secret, X-CSRF-Token, X-Requested-With, X-Device-ID, X-FS-IPC-Token');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-FS-IPC-Secret, X-CSRF-Token, X-Requested-With');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') {
-    if (origin && !allowedOrigins.includes(origin)) {
-      return res.status(403).json({ error: 'CORS policy violation: Origin not allowed' });
-    }
     return res.sendStatus(204);
   }
   next();

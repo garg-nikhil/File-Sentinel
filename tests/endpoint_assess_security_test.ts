@@ -185,7 +185,9 @@ async function runEndpointSecurityUnitTests() {
     const res = await request(app)
       .post('/api/endpoint/assess')
       .set('Authorization', `Bearer ${token}`)
-      .send({});
+      .send({
+        deviceId
+      });
 
     assert.strictEqual(res.status, 200, 'Legitimate assessment must succeed');
     assert.ok(res.body.id.startsWith('EP-ASM-'), 'Assessment ID must be generated');

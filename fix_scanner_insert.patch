@@ -1,0 +1,34 @@
+--- backend/scannerEngine.ts
++++ backend/scannerEngine.ts
+@@ -438,8 +438,8 @@
+             const fileStmt = this.db.prepare(`
+               INSERT INTO files (
+                 file_id, scan_id, path, filename, extension, size, sha256,
+                 risk_score, classification, scan_status, created_at, modified_at,
+-                extracted_text_preview, metadata_json, warnings_json
+-              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', ?, ?)
++                extracted_text_preview, extracted_text, metadata_json, warnings_json
++              ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'UNKNOWN', 'SKIPPED', ?, ?, '', '', ?, ?)
+             `);
+             fileStmt.run(
+               fileId,
+@@ -477,8 +477,8 @@
+           const fileStmt = this.db.prepare(`
+             INSERT INTO files (
+               file_id, scan_id, path, filename, extension, size, sha256,
+               risk_score, classification, scan_status, created_at, modified_at,
+-              extracted_text_preview, metadata_json, warnings_json
+-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
++              extracted_text_preview, extracted_text, metadata_json, warnings_json
++            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           `);
+           fileStmt.run(
+             fileId,
+@@ -493,6 +493,7 @@
+             stats.birthtime.toISOString(),
+             stats.mtime.toISOString(),
+             text.substring(0, 500),
++            text,
+             JSON.stringify(metadata),
+             JSON.stringify(warnings)
+           );

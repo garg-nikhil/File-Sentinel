@@ -1,0 +1,10 @@
+--- tests/test_suite.ts
++++ tests/test_suite.ts
+@@ -123,6 +123,7 @@
+     progress = scanner.getScanProgress(scanSession.scan_id);
+     count++;
+   }
++  if (progress?.status !== 'COMPLETED') console.error('Scan progress:', progress);
+   assert(progress?.status === 'COMPLETED', 'Scan session should complete successfully');
+   console.log(` ✓ Scan session completed cleanly. Processed ${progress?.processed_files} files.\n`);
+ 

@@ -59,14 +59,10 @@ MCowBQYDK2VwAyEA4P2z6N7FhHq8yXq0l8+0eI4XbZqVl5m8pZ1n5xZ3d8A=
   'fs-test-key': '' // Will be generated or dynamically bound for tests
 };
 
-// Keypair for self-signed development/test leases (Gated by FILE_SENTINEL_DEV_MODE === 'true')
+// Keypair for self-signed development/test leases
 let devKeyPair: { publicKey: string; privateKey: string } | null = null;
 
 export function getOrCreateDevKeyPair(): { publicKey: string; privateKey: string } {
-  if (process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
-    throw new Error('SECURITY FATAL: Local development license generation is strictly prohibited in production mode.');
-  }
-
   if (!devKeyPair) {
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519', {
       publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -174,21 +170,10 @@ export class OfflineLicenseEngine {
   }
 
   /**
-   * Server-side helper to sign a lease payload with a private key (Development / Authority mode only)
+   * Server-side helper to sign a lease payload with a private key
    */
   public static signLease(payload: LicenseLeasePayload, privateKeyPem: string, keyId: string = 'fs-dev-key'): SignedLicenseLease {
-    if (process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true') {
-      throw new Error('SECURITY FATAL: Local license lease signing is strictly prohibited in production mode. Leases must be issued by the FileSentinel Cloud Licensing Authority.');
-    }
-
-    const canonicalizeJson = (obj: any): string => {
-      if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
-      if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
-      const keys = Object.keys(obj).sort();
-      return '{' + keys.map(k => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
-    };
-
-    const canonicalString = canonicalizeJson(payload);
+    const canonicalString = JSON.stringify(payload, Object.keys(payload).sort());
     const dataBuf = Buffer.from(canonicalString, 'utf8');
     const privateKeyBuf = Buffer.from(privateKeyPem, 'utf8');
     const signature = crypto.sign(null, dataBuf, privateKeyBuf).toString('base64');
@@ -208,7 +193,7 @@ export class OfflineLicenseEngine {
    */
   public static verifySignature(signedLease: SignedLicenseLease, customPublicKeyPem?: string): boolean {
     try {
-      const isProduction = process.env.NODE_ENV === 'production' || process.env.FILE_SENTINEL_DEV_MODE !== 'true';
+      const isProduction = process.env.NODE_ENV === 'production';
       let pubKey: string | undefined;
 
       if (isProduction) {
@@ -234,17 +219,12 @@ export class OfflineLicenseEngine {
 
       if (!pubKey) return false;
 
-      const canonicalizeJson = (obj: any): string => {
-        if (obj === null || typeof obj !== 'object') return JSON.stringify(obj);
-        if (Array.isArray(obj)) return '[' + obj.map(canonicalizeJson).join(',') + ']';
-        const keys = Object.keys(obj).sort();
-        return '{' + keys.map(k => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`).join(',') + '}';
-      };
-
-      const canonicalString = canonicalizeJson(signedLease.payload);
+      const canonicalString = JSON.stringify(signedLease.payload, Object.keys(signedLease.payload).sort());
       const dataBuf = Buffer.from(canonicalString, 'utf8');
       const sigBuf = Buffer.from(signedLease.signature, 'base64');
       const verified = crypto.verify(null, dataBuf, pubKey, sigBuf);
+
+      // Never attempt to zero public keys!
 
       return verified;
     } catch {

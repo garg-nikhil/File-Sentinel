@@ -32,9 +32,7 @@
       },
       "shell": {
         "all": false,
-        "open": true,
-        "execute": false,
-        "sidecar": false
+        "open": true
       }
     },
     "bundle": {

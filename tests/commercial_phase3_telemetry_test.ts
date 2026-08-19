@@ -11,7 +11,6 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 async function runPhase3TelemetryTests() {
-  process.env.FILE_SENTINEL_DEV_MODE = 'true';
   console.log('================================================================');
   console.log('   FileSentinel Phase 3: Privacy-Preserving Scan Telemetry Test   ');
   console.log('================================================================');
