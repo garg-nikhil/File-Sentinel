@@ -63,6 +63,9 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
       }
     } catch (err: any) {
       console.error('[DATABASE SECURITY FATAL] Decryption/integrity check failed. FAILING CLOSED.', err.message);
+      try {
+        db.close();
+      } catch {}
       throw new Error(`SECURITY FATAL: Database decryption or integrity check failed. Fail-closed enforced. Reason: ${err.message}`);
     }
 
@@ -837,7 +840,7 @@ export function getDatabase(dbPath: string = './filesentinel.db'): DatabaseSync 
   try {
     instance = initDb(dbPath);
   } catch (err: any) {
-    if (err?.code === 'ERR_SQLITE_ERROR' || err?.message?.includes('malformed')) {
+    if (err?.code === 'ERR_SQLITE_ERROR' || err?.message?.includes('malformed') || err?.message?.includes('integrity check failed') || err?.message?.includes('SECURITY FATAL')) {
       console.warn(`[SQLite] Database corrupt (${err.message}). Removing and recreating fresh database.`);
       try {
         if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);

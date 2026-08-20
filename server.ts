@@ -41,7 +41,11 @@ async function startServer() {
   // Mount Vite middleware in development
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+        watch: process.env.DISABLE_HMR === 'true' ? null : undefined,
+      },
       appType: 'spa'
     });
     app.use(vite.middlewares);
@@ -57,6 +61,14 @@ async function startServer() {
 
   const server = app.listen(PORT, HOST, () => {
     console.log(`[FileSentinel] Local-First Security Server running on http://${HOST}:${PORT}`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[FileSentinel] Port ${PORT} is already in use.`);
+    } else {
+      console.error('[FileSentinel] Server runtime error:', err);
+    }
   });
 
   server.headersTimeout = 60000;
